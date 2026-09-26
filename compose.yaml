@@ -1,0 +1,56 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: github-accelerator:local
+    ports:
+      - "8000:8000"
+    environment:
+      GITHUB_ACCELERATOR_STATIC_DIR: /app/frontend/dist
+      GITHUB_ACCELERATOR_MAX_CONCURRENT_PROXIES: "8"
+      GITHUB_ACCELERATOR_MAX_CONNECTIONS: "16"
+      GITHUB_ACCELERATOR_MAX_KEEPALIVE_CONNECTIONS: "8"
+      GITHUB_ACCELERATOR_CONNECT_TIMEOUT_SECONDS: "10"
+      GITHUB_ACCELERATOR_READ_TIMEOUT_SECONDS: "300"
+      GITHUB_ACCELERATOR_POOL_TIMEOUT_SECONDS: "10"
+      GITHUB_ACCELERATOR_ARCHIVE_CACHE_DIR: /app/.cache/archives
+      GITHUB_ACCELERATOR_ARCHIVE_CACHE_MAX_BYTES: "21474836480"
+      # Read from the project .env through interpolation, so one file configures
+      # both this container and a plain uvicorn run. Each value falls back to a
+      # safe default, which keeps the app running in log-only mode when no mail
+      # transport is configured.
+      GITHUB_ACCELERATOR_PUBLIC_BASE_URL: ${GITHUB_ACCELERATOR_PUBLIC_BASE_URL:-http://127.0.0.1:8000}
+      GITHUB_ACCELERATOR_VERIFICATION_TTL_SECONDS: ${GITHUB_ACCELERATOR_VERIFICATION_TTL_SECONDS:-86400}
+      GITHUB_ACCELERATOR_VERIFICATION_RESEND_SECONDS: ${GITHUB_ACCELERATOR_VERIFICATION_RESEND_SECONDS:-60}
+      GITHUB_ACCELERATOR_SMTP_HOST: ${GITHUB_ACCELERATOR_SMTP_HOST:-}
+      GITHUB_ACCELERATOR_SMTP_PORT: ${GITHUB_ACCELERATOR_SMTP_PORT:-587}
+      GITHUB_ACCELERATOR_SMTP_USERNAME: ${GITHUB_ACCELERATOR_SMTP_USERNAME:-}
+      GITHUB_ACCELERATOR_SMTP_PASSWORD: ${GITHUB_ACCELERATOR_SMTP_PASSWORD:-}
+      GITHUB_ACCELERATOR_SMTP_FROM: ${GITHUB_ACCELERATOR_SMTP_FROM:-}
+      GITHUB_ACCELERATOR_SMTP_STARTTLS: ${GITHUB_ACCELERATOR_SMTP_STARTTLS:-true}
+    volumes:
+      - accelerator-cache:/app/.cache
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import sys, urllib.request;
+          sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  accelerator-cache:

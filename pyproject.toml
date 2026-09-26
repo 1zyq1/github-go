@@ -1,0 +1,128 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "github-accelerator"
+version = "0.1.0"
+description = "Secure GitHub release and raw-file download accelerator"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "anyio>=4.10,<5",
+    "fastapi>=0.135,<1",
+    "httpx2[http2,brotli,zstd]>=2.13.1,<3",
+    "orjson>=3.11,<4",
+    "pydantic-settings>=2.12,<3",
+    "uvicorn[standard]>=0.40,<1",
+]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.31,<2",
+    "pytest>=8.4,<10",
+    "pytest-asyncio>=1.1,<2",
+    "pytest-cov>=7,<8",
+    "ruff>=0.14,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.basedpyright]
+typeCheckingMode = "all"
+pythonVersion = "3.13"
+pythonPlatform = "All"
+include = ["app", "tests"]
+exclude = ["**/__pycache__", "**/.venv", "**/build", "**/dist", "frontend", ".omo"]
+venvPath = "."
+venv = ".venv"
+enableTypeIgnoreComments = false
+reportMissingTypeStubs = false
+reportUnnecessaryTypeIgnoreComment = "error"
+reportUnusedVariable = "error"
+reportMissingParameterType = "error"
+reportPrivateUsage = "error"
+strictListInference = true
+strictDictionaryInference = true
+strictSetInference = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["app", "tests"]
+extend-exclude = [".omo", "frontend"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",
+    "CPY001",
+    "D203",
+    "D213",
+    "FBT001",
+    "FBT002",
+    "FIX002",
+    "ISC001",
+    "TD002",
+    "TD003",
+]
+fixable = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "ARG",
+    "D",
+    "PLR2004",
+    "S101",
+    "S105",
+    "S106",
+    "SLF001",
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Cookie",
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+[tool.pytest.ini_options]
+minversion = "8.4"
+testpaths = ["tests"]
+asyncio_mode = "strict"
+addopts = [
+    "-ra",
+    "--strict-config",
+    "--strict-markers",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+relative_files = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if typing.TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+]
