@@ -208,6 +208,9 @@ class WebPageProxy:
                 headers["location"] = _rewrite_location(location, base_url)
             return _bodyless_response(response.status_code, headers)
         headers["content-security-policy"] = _PAGE_CONTENT_SECURITY_POLICY
+        # A mirrored page is another site's content served from this origin, so
+        # it is kept out of search results entirely.
+        headers["x-robots-tag"] = "noindex, nofollow"
         if method == "HEAD":
             await response.aclose()
             return _bodyless_response(response.status_code, headers)

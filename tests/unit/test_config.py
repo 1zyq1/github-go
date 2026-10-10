@@ -1,10 +1,26 @@
 import os
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 from app.config import Settings
 from app.errors import AppError, error_envelope
 from pydantic import ValidationError
+
+
+class _DatabaseSettings(TypedDict):
+    """The three fields the account store cannot run without."""
+
+    mysql_host: str
+    mysql_user: str
+    mysql_database: str
+
+
+_DATABASE: _DatabaseSettings = {
+    "mysql_host": "db.internal",
+    "mysql_user": "accelerator",
+    "mysql_database": "accelerator",
+}
 
 
 def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -19,7 +35,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
         if name.startswith("GITHUB_ACCELERATOR_"):
             monkeypatch.delenv(name)
 
-    settings = Settings()
+    settings = Settings(**_DATABASE)
 
     assert settings.static_dir == Path("frontend/dist")
     assert settings.trusted_hosts == ()
@@ -30,6 +46,23 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert settings.max_concurrent_proxies == 100
     assert settings.max_connections == 100
     assert settings.max_keepalive_connections == 20
+    assert settings.mysql_port == 3306
+    assert settings.mysql_table_prefix == ""
+    assert settings.mysql_pool_min_size == 1
+    assert settings.mysql_pool_max_size == 10
+
+
+def test_settings_requires_a_configured_database(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    for name in tuple(os.environ):
+        if name.startswith("GITHUB_ACCELERATOR_"):
+            monkeypatch.delenv(name)
+
+    with pytest.raises(ValidationError):
+        _ = Settings()
 
 
 def test_settings_reads_prefixed_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,13 +104,14 @@ def test_settings_parses_comma_separated_trusted_hosts(
 )
 def test_settings_rejects_out_of_range_values(field_name: str, value: int) -> None:
     with pytest.raises(ValidationError):
-        _ = Settings.model_validate({field_name: value})
+        _ = Settings.model_validate({**_DATABASE, field_name: value})
 
 
 def test_settings_rejects_keepalive_above_connection_capacity() -> None:
     with pytest.raises(ValidationError):
         _ = Settings.model_validate(
             {
+                **_DATABASE,
                 "max_connections": 20,
                 "max_keepalive_connections": 21,
             }

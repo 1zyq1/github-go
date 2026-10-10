@@ -61,16 +61,33 @@ GET  /proxy/{token}       -> 流式下载（支持 HEAD）
 ## 账号与额度
 
 - 注册是 `POST /api/auth/register`，请求体 `{"username": "...", "password": "...", "email": "..."}`；登录是 `POST /api/auth/login`，请求体 `{"username": "...", "password": "..."}`。用户名 3..32 位，只允许字母、数字、`_`、`-`，且必须以字母或数字开头和结尾；密码 8..128 位、不做 trim；邮箱需形如 `name@example.com`。密码加盐后用 `scrypt`（N=16384）存储；登录态是随机 token，库里只存它的 SHA-256，明文只存在于 Cookie。
-- **注册必须验证邮箱**：注册不再直接登录，返回 `email_verified:false` 且不下发 Cookie，服务器把验证链接发到填写的地址。浏览器点开链接会 303 回到 `/?verified=1`，链接失效则回到 `/?verify_failed=1`；脚本调用 `GET /api/auth/verify?token=...` 会直接拿到 JSON（成功为 `email_verified:true`，失败为 400 `verification_invalid`）。
+- **注册必须验证邮箱**：注册不再直接登录，返回 `email_verified:false` 且不下发 Cookie，服务器把验证链接发到填写的地址。浏览器点开链接会 303 回到 `/?verified=1` 并**顺手登录**——点开链接本身就证明了对地址的控制，所以落地页已经是登录态，不用再输一次密码；同一个浏览器里原来那个停在「验证邮箱」的标签页切回来、或浏览器窗口重获焦点时会自动变成已登录。链接失效则回到 `/?verify_failed=1`。脚本调用 `GET /api/auth/verify?token=...` 只拿 JSON（成功为 `email_verified:true`，失败为 400 `verification_invalid`），不会拿到 Cookie。
 - **未验证的账号无法登录**：登录会返回 `email_verified:false` 且不设 Cookie，前端停在「验证邮箱」界面，可用 `POST /api/auth/verify/request`（需要密码）重发链接，默认 60 秒冷却，过于频繁返回 429 `verification_throttled`。没有邮箱的老账号在登录时会被要求补填地址，填好后同样走一次验证。
 - 邮件发送失败时注册整体回滚（账号、用户名、邮箱都不占位），返回 503 `email_unavailable`。验证链接默认 24 小时有效，`VERIFICATION_TTL_SECONDS` 可调；同一账号同时只保留一封有效邮件，重发会作废旧链接。
 - SMTP 用环境变量配置（`SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` / `SMTP_STARTTLS`），兼容 QQ 邮箱、163、腾讯企业邮、Gmail 与 Resend。`SMTP_HOST` 留空时**不发送邮件**，链接会写进服务日志，便于本地开发。链接地址由 `PUBLIC_BASE_URL` 拼出，部署时要改成用户真正访问的地址。
-- 登录态放在 `ga_session` Cookie 里（`HttpOnly`、`SameSite=Lax`、默认 30 天）。站点跑在 HTTPS 上时把 `SESSION_COOKIE_SECURE` 设为 `true`。
+- 登录态放在 `ga_session` Cookie 里（`HttpOnly`、`SameSite=Lax`），默认 30 天（`SESSION_TTL_SECONDS=2592000`）。这是**从登录那一刻算起的绝对有效期，不会因为持续使用而续期**，到期后重新登录即可。站点跑在 HTTPS 上时把 `SESSION_COOKIE_SECURE` 设为 `true`。
 - **计价对象是「真正取走内容」**：`GET` 命中 `/proxy/{token}`（文件下载）或镜像页面时扣 1 次。`POST /api/resolve`（生成链接）、`HEAD`（探测存在性）、`POST /api/auth/*` 都不计入额度，所以反复解析不会平白掉次数。
 - 默认 `USAGE_LIMIT=10`、`USAGE_WINDOW_SECONDS=3600`，按账号滑动窗口计算。额度用尽时：JSON 客户端收到 429 与 `Retry-After`；浏览器直接访问下载链接会被 302 送回 `/?limited=1`，页面上给出提示，生成按钮同时置灰。
 - **失败不扣费**：上游返回非 200/206（例如 404、502）或请求抛错时，本次占用立即退还。
 - 未登录的 JSON 客户端收到 401 `unauthorized`；浏览器导航被 302 送回 `/`。`/api/health`、`/api/stats` 与自有前端产物（`/`、`/stats`、`/assets/*`、`/fonts/*`）保持公开，否则登录页与数据页本身都加载不出来。
-- 账号与用量存在 SQLite（默认 `.cache/accounts.db`），首次使用时建表。
+- 账号与用量存在 MySQL 里（必须配置 `MYSQL_HOST`、`MYSQL_USER`、`MYSQL_DATABASE`，表在首次使用时自动创建）。密码只存 scrypt 加盐摘要，会话令牌只存 SHA-256 摘要，库被读走也换不来可用口令或 Cookie。
+
+## 与博客互通（跨站单点登录）
+
+登录面板的「用博客账号登录」按钮与博客登录页的「使用 GitHub 加速站账号登录」按钮，是同一套
+**签名断言**式单点登录：两边后端共用一把密钥（`GITHUB_ACCELERATOR_SSO_SHARED_SECRET`，与博客的
+`SSO_SHARED_SECRET` 填**同一个值**），互相签发/验证短时效登录票据（HMAC-SHA256，默认 5 分钟），
+按**邮箱**认人 —— 有同邮箱账号就直接登录，没有就自动建号（邮箱视为已验证）。配置见
+`.env.example` 的「Cross-site single sign-on」段；留空即关闭（前端自动隐藏按钮）。
+
+新增端点（`/api/sso/*` 在鉴权层按 `OPTIONAL` 处理，登录前后都能访问）：
+
+```
+GET /api/sso/providers      -> {"blog": true|false}   前端据此决定是否显示按钮
+GET /api/sso/start          -> 302 到博客 authorize（本站作为 RP）
+GET /api/sso/authorize      -> 已登录签发断言；未登录先回本站登录（本站作为 IdP）
+GET /api/sso/callback       -> 验签断言 → 建号/登录 → 302 回 /?sso=ok
+```
 
 ## 数据页
 
@@ -100,7 +117,7 @@ GET /acme/widgets?tab=...  -> 查询串一并透传
 - 文件形状的路径会 302 转交给已有的文件代理，自动复用归档缓存与 Range 断点续传，仓库页的「Download ZIP」因此可用。
 - 指向 `github.com` 的重定向会改写成同源路径，避免浏览器跳回被阻断的域名；指向其他站点的重定向原样透传。
 - 请求侧的 `Cookie`、`Authorization`、客户端 IP 一律不转发；响应侧的 `Set-Cookie` 也不转发。
-- 自有页面（`/`、`/assets/*`、`/fonts/*`）仍使用严格 CSP；放宽只作用于镜像页面。
+- 自有页面（`/`、`/assets/*`、`/fonts/*`）使用自有 CSP，除访问统计脚本外不放行任何第三方来源；镜像页面则是 `script-src 'none'`，两者互不影响。
 - 自有前端的文本产物（`/assets/*` 下的 JS 与 CSS）由 Starlette `GZipMiddleware` 压缩，但中间件只挂在静态挂载点上：挂到整个应用会连二进制下载流一起压缩，纯属浪费。`/fonts/*` 不挂——woff2 本身已压缩，而 `mimetypes` 不认这个扩展名，文件会被当成 `application/octet-stream` 再压一遍。
 - `/api/*` 与 `/proxy/*` 是保留前缀，其中的未知路径仍返回 JSON 错误信封，不会被转发到 GitHub。
 
@@ -123,7 +140,14 @@ GET /acme/widgets?tab=...  -> 查询串一并透传
 | `TRUSTED_HOSTS` | 空 | 逗号分隔的 Host 白名单。留空接受任意 Host；非空时由 Starlette `TrustedHostMiddleware` 在最外层拦截伪造 Host，返回 400 `Invalid host header` |
 | `USAGE_LIMIT` | `10` | 每个账号在每个窗口内的访问次数上限 |
 | `USAGE_WINDOW_SECONDS` | `3600` | 额度窗口长度（秒） |
-| `ACCOUNTS_DB_PATH` | `.cache/accounts.db` | 账号与用量数据库路径，须对运行用户可写 |
+| `MYSQL_HOST` | 空 | 账号库地址，**必填**；三项必填项缺一即启动报错 |
+| `MYSQL_PORT` | `3306` | 账号库端口 |
+| `MYSQL_USER` | 空 | 账号库用户名，**必填** |
+| `MYSQL_PASSWORD` | 空 | 账号库密码 |
+| `MYSQL_DATABASE` | 空 | 账号库库名，**必填** |
+| `MYSQL_TABLE_PREFIX` | 空 | 表名前缀，只允许小写字母、数字与下划线；同一套库内靠它隔离测试与正式数据 |
+| `MYSQL_POOL_MIN_SIZE` | `1` | 连接池下限 |
+| `MYSQL_POOL_MAX_SIZE` | `10` | 连接池上限，不得小于下限 |
 | `SESSION_TTL_SECONDS` | `2592000` | 登录态有效期（秒），默认 30 天 |
 | `SESSION_COOKIE_SECURE` | `false` | 为 `true` 时 Cookie 只随 HTTPS 发送，部署到 HTTPS 站点时应开启 |
 | `PUBLIC_BASE_URL` | `http://127.0.0.1:8000` | 验证邮件里链接的基地址。**必须改成用户真正访问到的地址**，否则邮件里的链接只有本机能打开 |
@@ -137,6 +161,16 @@ GET /acme/widgets?tab=...  -> 查询串一并透传
 | `SMTP_STARTTLS` | `true` | `587` 用 `true`（STARTTLS），`465` 用 `false`（隐式 TLS） |
 
 表中是代码默认值；`.env.example` 另给了一套更保守的起步值（连接 16、keepalive 8、并发 8），适合直接复制的场景。
+
+账号与用量在 MySQL 里，不在容器卷里，所以 `accelerator-cache` 卷只承载归档缓存。数据库账号需要有**建表权限**（首次运行会建表）；测试用 `MYSQL_TABLE_PREFIX` 指到另一套表名，因此测试与正式数据可以共用一个库而互不干扰。
+
+## 搜索引擎与访问统计
+
+- 自有页面（`/` 与 `/stats`）是可索引的。`index.html` 带 `rel="canonical"`、Open Graph、Twitter Card 与 `WebApplication` 结构化数据；`<noscript>` 里另有一段可被爬虫读到的正文，否则 SPA 除了首屏模板对爬虫没有可读内容。
+- `/robots.txt` 与 `/sitemap.xml` 由后端生成，基地址取 `PUBLIC_BASE_URL`，所以换域名不需要改代码。`robots.txt` 禁掉 `/api/` 与 `/proxy/`（不是内容页）并指向 sitemap。`/og.png` 是社交预览图，构建产物里没有就返回 404 信封。
+- **镜像页面一律带 `X-Robots-Tag: noindex, nofollow`**。镜像内容与 GitHub 原文逐字相同，若允许收录，本站会与原文争夺同一批查询，两边都受损。
+- 访问统计用 Umami：自有页面加载 `cloud.umami.is` 的脚本并上报到 `gateway.umami.is`，这两个来源在自有 CSP 的 `script-src` 与 `connect-src` 里被显式列出；镜像页面仍是 `script-src 'none'`，统计只在自有 shell 上运行。注意 `Referrer-Policy: no-referrer` 与统计并存，因此报表里没有来源页，这是有意的隐私取舍。
+- `index.html` 里的 canonical 与 `og:*` 地址写死为 `https://github.1zyq1.com/`。**换域名时这里必须和 `PUBLIC_BASE_URL` 一起改**：`spa_shell` 用 `FileResponse` 直接下发产物，没有做变量注入，理由是保留 ETag/304 这条廉价路径。
 
 ## 部署
 

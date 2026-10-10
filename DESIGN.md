@@ -138,7 +138,7 @@ Depth strategy: **tonal shift**. Depth comes from `--surface-canvas`, `--surface
 
 ### AuthPanel
 
-- **Structure**: `section` with one `h2`, a one-line lead that names the hourly allowance and the confirmation requirement, and either the entry form or the pending view. The entry form is a two-option mode switch plus a `form` with a name field, a password field, an email field that appears only while registering, and one primary submit. The pending view names the address a link was sent to, repeats the email field, and offers a resend plus a way back to the form.
+- **Structure**: `section` with one `h2`, a one-line lead that names the hourly allowance and the confirmation requirement, and either the entry form or the pending view. The entry form is a two-option mode switch plus a `form` with a name field, a password field, an email field that appears only while registering, and one primary submit. The pending view names the address a link was sent to, repeats the email field, and offers a resend plus a way back to the form. While it is showing, the panel re-reads the session whenever the tab becomes visible or the window regains focus: the mailed link is opened in whichever tab the mail client picks, but the cookie it sets belongs to the whole browser, so returning to this tab is exactly when the confirmation can be noticed.
 - **Variants**: login, register, awaiting confirmation. Submitting is a state, not a variant.
 - **Spacing**: `--space-5` between the panel's blocks, `--space-4` inside the form, `--space-1` between mode segments, `--space-3` between the pending actions, `--space-6` panel padding.
 - **States**: default, hover, focus-visible, invalid, disabled, submitting. The selected mode segment uses `--surface-raised` on a `--surface-sunken` track.
@@ -180,6 +180,15 @@ Depth strategy: **tonal shift**. Depth comes from `--surface-canvas`, `--surface
 - **States**: static. A highlighted row (here the unbounded 全部 range) uses weight, not colour alone.
 - **Accessibility**: cells stay cells. The table is never reflowed into blocks with `display: block`, because that strips the row and column association screen readers depend on; it fits 320px instead by using 14px text and four narrow columns. Numeric columns are right-aligned with `font-variant-numeric: tabular-nums` so digits line up across rows.
 - **Motion**: none.
+
+### Social Preview Card
+
+- **Structure**: a 1200x630 `og.png` served from the build root. An azure bar closes the top, a rounded azure mark carrying the favicon glyph sits beside the public host as the wordmark, the product name is the largest text, one line states the purpose, four capability chips follow, and a ruled footer closes the card.
+- **Variants**: one. It is a static asset under `frontend/public/og.png`, not a component, so nothing here responds to state.
+- **Spacing**: the artwork is drawn at the viewport size with no scrolling and the content box is exactly 1200x630, because a card that overflows is cropped by the platform instead of being scaled.
+- **States**: none.
+- **Accessibility**: every claim on the card repeats text already present on the page, and `og:image:alt` carries the same wording.
+- **Motion**: none. Depth stays tonal, so the card takes the canvas, the azure accent and the hairlines from the tokens above, with no shadow, gradient or glow.
 
 ## 5. States & Depth
 

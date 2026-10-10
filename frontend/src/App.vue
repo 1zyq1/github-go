@@ -33,6 +33,12 @@ const sessionError = ref("");
 const confirmed = ref(false);
 /** The verification link was already spent or has expired. */
 const verifyFailed = ref(false);
+/** The blog SSO sign-in completed successfully. */
+const ssoConfirmed = ref(false);
+/** The blog SSO sign-in failed with this message. */
+const ssoError = ref("");
+/** A pending return to the SSO authorize URL after a local sign-in. */
+const ssoReturn = ref("");
 
 const quotaExhausted = computed(() => {
   const quota = session.value?.quota ?? null;
@@ -50,6 +56,15 @@ async function refreshSession(): Promise<void> {
     if (quota === null || quota.remaining > 0) {
       limited.value = false;
     }
+    if (next.authenticated && ssoReturn.value) {
+      // A blog sign-in was waiting for a local session: finish the SSO handshake.
+      const target = ssoReturn.value;
+      ssoReturn.value = "";
+      if (target.startsWith("/") && !target.startsWith("//")) {
+        window.location.replace(target);
+        return;
+      }
+    }
   } catch {
     session.value = null;
     sessionState.value = "anonymous";
@@ -63,6 +78,15 @@ onMounted((): void => {
   limited.value = parameters.get("limited") === "1";
   confirmed.value = parameters.get("verified") === "1";
   verifyFailed.value = parameters.get("verify_failed") === "1";
+  // The SSO outcome (sso=ok|error) and the pending authorize return (sso_return).
+  ssoConfirmed.value = parameters.get("sso") === "ok";
+  if (parameters.get("sso") === "error") {
+    ssoError.value = parameters.get("message") || "博客账号登录失败，请重试。";
+  }
+  const returnTo = parameters.get("sso_return") ?? "";
+  if (returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+    ssoReturn.value = returnTo;
+  }
   void refreshSession();
 });
 
@@ -98,10 +122,16 @@ async function handleUnauthorized(): Promise<void> {
       <StatsPanel v-if="page === 'stats'" />
       <template v-else>
         <p v-if="confirmed" class="notice" role="status" data-test="verified-notice">
-          邮箱验证成功，请登录。
+          邮箱验证成功，已自动登录。
         </p>
         <p v-if="verifyFailed" class="notice notice--warning" role="alert" data-test="verify-failed">
           验证链接无效或已过期，请重新获取。
+        </p>
+        <p v-if="ssoConfirmed" class="notice" role="status" data-test="sso-notice">
+          已通过博客账号登录。
+        </p>
+        <p v-if="ssoError" class="notice notice--warning" role="alert" data-test="sso-error">
+          {{ ssoError }}
         </p>
         <p
           v-if="limited || quotaExhausted"

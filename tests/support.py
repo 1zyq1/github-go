@@ -1,11 +1,14 @@
 """Shared helpers for the backend test suite."""
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs, urlparse
 
+import aiomysql
 import httpx2
+from app.accounts import AccountStore, mysql_target
 from app.auth import SESSION_COOKIE_NAME
+from app.config import Settings
 from fastapi import FastAPI
 
 TEST_USERNAME = "test-account"
@@ -82,6 +85,51 @@ async def sign_in(client: httpx2.AsyncClient, username: str = TEST_USERNAME) -> 
         message = f"test sign-in failed: {response.status_code} {response.text}"
         raise RuntimeError(message)
     return client
+
+
+@asynccontextmanager
+async def opened_store(store: AccountStore) -> AsyncGenerator[AccountStore]:
+    """Empty the account tables, hand the store over, and close it afterwards.
+
+    The pool is bound to the event loop that created it, so a store cannot be
+    shared between tests, and the tables are emptied first so counts, quotas,
+    and statistics all start from a known state.
+    """
+    await store.initialize()
+    await store.purge()
+    try:
+        yield store
+    finally:
+        await store.close()
+
+
+def prefixed_table(name: str) -> str:
+    """Return the prefixed name of one table in the shared account database."""
+    return f"{Settings().mysql_table_prefix}{name}"
+
+
+async def execute_test_sql(statement: str, parameters: Sequence[object] = ()) -> None:
+    """Run one statement against the test tables over its own connection.
+
+    Seeding a row the product API cannot produce -- an account from before
+    addresses were collected, for instance -- needs direct SQL, and the store's
+    connection is deliberately private.
+    """
+    target = mysql_target(Settings())
+    connection = await aiomysql.connect(
+        host=target.host,
+        port=target.port,
+        user=target.user,
+        password=target.password,
+        db=target.database,
+        charset="utf8mb4",
+        autocommit=True,
+    )
+    try:
+        async with connection.cursor() as cursor:
+            _ = await cursor.execute(statement, parameters)
+    finally:
+        connection.close()
 
 
 @asynccontextmanager

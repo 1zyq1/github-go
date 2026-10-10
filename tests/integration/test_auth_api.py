@@ -1,6 +1,5 @@
 """Integration tests for the account API and the per-user access quota."""
 
-import sqlite3
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -10,7 +9,8 @@ from typing import override
 import anyio
 import httpx2
 import pytest
-from app.accounts import hash_password
+from app.accounts import AccountStore, build_account_store, hash_password
+from app.auth import SESSION_COOKIE_NAME
 from app.config import Settings
 from app.errors import ErrorEnvelope
 from app.mailer import MailDeliveryError
@@ -23,6 +23,9 @@ from tests.support import (
     RecordingMailer,
     address_for,
     build_client,
+    execute_test_sql,
+    opened_store,
+    prefixed_table,
     sign_in,
     verification_token,
 )
@@ -63,21 +66,26 @@ async def _mirror_client(
 ) -> AsyncGenerator[httpx2.AsyncClient]:
     """Open a signed-in client whose quota is small enough to exhaust."""
     upstream_client = upstream.client()
-    app = create_app(
-        settings=Settings(
-            static_dir=tmp_path / "absent",
-            usage_limit=limit,
-            usage_window_seconds=3600,
-        ),
-        upstream_client=upstream_client,
-        capacity_limiter=anyio.CapacityLimiter(2),
-        mailer=RecordingMailer(),
+    settings = Settings(
+        static_dir=tmp_path / "absent",
+        usage_limit=limit,
+        usage_window_seconds=3600,
     )
-    try:
-        async with build_client(app) as api:
-            yield await sign_in(api)
-    finally:
-        await upstream_client.aclose()
+    # This helper asserts on its own allowance, so its store has to come from
+    # these settings rather than from the shared, effectively unlimited one.
+    async with opened_store(build_account_store(settings)) as store:
+        app = create_app(
+            settings=settings,
+            upstream_client=upstream_client,
+            capacity_limiter=anyio.CapacityLimiter(2),
+            mailer=RecordingMailer(),
+            account_store=store,
+        )
+        try:
+            async with build_client(app) as api:
+                yield await sign_in(api)
+        finally:
+            await upstream_client.aclose()
 
 
 def _write_spa(tmp_path: Path, *, favicon: bool) -> Path:
@@ -316,8 +324,14 @@ async def test_a_head_probe_does_not_spend_the_quota(tmp_path: Path) -> None:
     assert quota.remaining == 1
 
 
-async def test_the_built_shell_is_public_and_serves_its_assets(tmp_path: Path) -> None:
-    app = create_app(settings=Settings(static_dir=_write_spa(tmp_path, favicon=True)))
+async def test_the_built_shell_is_public_and_serves_its_assets(
+    tmp_path: Path,
+    account_store: AccountStore,
+) -> None:
+    app = create_app(
+        settings=Settings(static_dir=_write_spa(tmp_path, favicon=True)),
+        account_store=account_store,
+    )
 
     async with build_client(app) as api:
         shell = await api.get("/")
@@ -332,8 +346,14 @@ async def test_the_built_shell_is_public_and_serves_its_assets(tmp_path: Path) -
     assert icon.status_code == 200
 
 
-async def test_a_build_without_an_icon_reports_not_found(tmp_path: Path) -> None:
-    app = create_app(settings=Settings(static_dir=_write_spa(tmp_path, favicon=False)))
+async def test_a_build_without_an_icon_reports_not_found(
+    tmp_path: Path,
+    account_store: AccountStore,
+) -> None:
+    app = create_app(
+        settings=Settings(static_dir=_write_spa(tmp_path, favicon=False)),
+        account_store=account_store,
+    )
 
     async with build_client(app) as api:
         response = await api.get("/favicon.svg")
@@ -351,25 +371,11 @@ class _BrokenMailer(RecordingMailer):
         raise MailDeliveryError
 
 
-def _seed_legacy_database(db_path: Path) -> None:
-    """Create an account row the way the pre-feature schema wrote it."""
-    connection = sqlite3.connect(db_path)
-    _ = connection.executescript(
-        """
-        CREATE TABLE users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL COLLATE NOCASE UNIQUE,
-            password_hash TEXT NOT NULL,
-            created_at REAL NOT NULL
-        );
-        """
-    )
-    _ = connection.execute(
-        "INSERT INTO users(username, password_hash, created_at) VALUES(?, ?, ?)",
-        ("legacy", hash_password(_PASSWORD), time.time()),
-    )
-    _ = connection.commit()
-    connection.close()
+async def _seed_account_without_address(username: str) -> None:
+    """Insert an account the way the store wrote one before verification."""
+    columns = "(username, password_hash, created_at) VALUES(%s, %s, %s)"
+    statement = "INSERT INTO `" + prefixed_table("users") + "`" + columns
+    await execute_test_sql(statement, (username, hash_password(_PASSWORD), time.time()))
 
 
 async def test_a_browser_follows_the_mailed_link_into_the_shell(
@@ -389,6 +395,14 @@ async def test_a_browser_follows_the_mailed_link_into_the_shell(
 
     assert landed.status_code == 303
     assert landed.headers["location"] == "/?verified=1"
+    assert SESSION_COOKIE_NAME in anon_client.cookies
+
+    # Opening the link proved control of the address, so the browser arrives
+    # already signed in and the visitor never types the password a second time.
+    session = _session(await anon_client.get("/api/auth/me"))
+    assert session.authenticated is True
+    assert session.username == "browser-user"
+    assert session.email_verified is True
 
 
 async def test_a_browser_with_a_spent_link_returns_with_a_flag(
@@ -417,6 +431,29 @@ async def test_a_script_gets_a_json_refusal_for_an_unknown_token(
     assert _error_code(response) == "verification_invalid"
 
 
+async def test_a_script_confirms_an_address_without_gaining_a_session(
+    anon_client: httpx2.AsyncClient,
+) -> None:
+    VERIFICATION_MAILBOX.clear()
+    _ = await anon_client.post(
+        "/api/auth/register",
+        json={"username": "script-user", "password": _PASSWORD, "email": "s@example.com"},
+    )
+
+    confirmed = await anon_client.get(
+        "/api/auth/verify",
+        params={"token": verification_token()},
+        headers={"accept": "application/json"},
+    )
+
+    assert confirmed.status_code == 200
+    assert _session(confirmed).email_verified is True
+    # Only the browser entry point signs anyone in, so a script still has to
+    # ask for a session explicitly.
+    assert SESSION_COOKIE_NAME not in anon_client.cookies
+    assert _session(await anon_client.get("/api/auth/me")).authenticated is False
+
+
 async def test_a_link_can_be_requested_again_without_a_new_address(
     anon_client: httpx2.AsyncClient,
 ) -> None:
@@ -442,12 +479,15 @@ async def test_a_link_can_be_requested_again_without_a_new_address(
     assert _session(confirmed).email_verified is True
 
 
-async def test_an_account_without_an_address_must_supply_one(tmp_path: Path) -> None:
-    db_path = tmp_path / "legacy.db"
-    _seed_legacy_database(db_path)
+async def test_an_account_without_an_address_must_supply_one(
+    tmp_path: Path,
+    account_store: AccountStore,
+) -> None:
+    await _seed_account_without_address("legacy")
     app = create_app(
-        settings=Settings(static_dir=tmp_path / "absent", accounts_db_path=db_path),
+        settings=Settings(static_dir=tmp_path / "absent"),
         mailer=RecordingMailer(),
+        account_store=account_store,
     )
 
     async with build_client(app) as api:
@@ -495,8 +535,15 @@ async def test_a_wrong_password_never_mails_a_link(anon_client: httpx2.AsyncClie
     assert VERIFICATION_MAILBOX == []
 
 
-async def test_a_failing_transport_rolls_the_registration_back(tmp_path: Path) -> None:
-    app = create_app(settings=Settings(static_dir=tmp_path / "absent"), mailer=_BrokenMailer())
+async def test_a_failing_transport_rolls_the_registration_back(
+    tmp_path: Path,
+    account_store: AccountStore,
+) -> None:
+    app = create_app(
+        settings=Settings(static_dir=tmp_path / "absent"),
+        mailer=_BrokenMailer(),
+        account_store=account_store,
+    )
 
     async with build_client(app) as api:
         failed = await api.post(
@@ -517,20 +564,25 @@ async def test_a_failing_transport_rolls_the_registration_back(tmp_path: Path) -
 
 
 async def test_a_link_inside_the_cooldown_is_refused(tmp_path: Path) -> None:
-    app = create_app(
-        settings=Settings(static_dir=tmp_path / "absent", verification_resend_seconds=60),
-        mailer=RecordingMailer(),
-    )
+    settings = Settings(static_dir=tmp_path / "absent", verification_resend_seconds=60)
+    # The cooldown is this test's own, so its store cannot be the shared,
+    # throttle-free one from the fixture.
+    async with opened_store(build_account_store(settings)) as store:
+        app = create_app(
+            settings=settings,
+            mailer=RecordingMailer(),
+            account_store=store,
+        )
 
-    async with build_client(app) as api:
-        registered = await api.post(
-            "/api/auth/register",
-            json={"username": "cooldown", "password": _PASSWORD, "email": "cool@example.com"},
-        )
-        again = await api.post(
-            "/api/auth/verify/request",
-            json={"username": "cooldown", "password": _PASSWORD, "email": "cool@example.com"},
-        )
+        async with build_client(app) as api:
+            registered = await api.post(
+                "/api/auth/register",
+                json={"username": "cooldown", "password": _PASSWORD, "email": "cool@example.com"},
+            )
+            again = await api.post(
+                "/api/auth/verify/request",
+                json={"username": "cooldown", "password": _PASSWORD, "email": "cool@example.com"},
+            )
 
     assert registered.status_code == 200
     assert again.status_code == 429

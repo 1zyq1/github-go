@@ -1,7 +1,6 @@
-"""Unit tests for the SQLite account store and its password helpers."""
+"""Unit tests for the MySQL account store and its password helpers."""
 
-import sqlite3
-from pathlib import Path
+from collections.abc import AsyncGenerator
 
 import pytest
 import pytest_asyncio
@@ -16,8 +15,12 @@ from app.accounts import (
     WindowStats,
     hash_password,
     hash_session_token,
+    mysql_target,
     verify_password,
 )
+from app.config import Settings
+
+from tests.support import opened_store
 
 pytestmark = pytest.mark.asyncio
 
@@ -57,11 +60,16 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
     return frozen
 
 
+def _store(policy: StorePolicy) -> AccountStore:
+    """Build a store on the shared test tables with an explicit policy."""
+    return AccountStore(mysql_target(Settings()), policy)
+
+
 @pytest_asyncio.fixture(loop_scope="function")
-async def store(tmp_path: Path) -> AccountStore:
-    built = AccountStore(tmp_path / "accounts.db", _policy())
-    await built.initialize()
-    return built
+async def store() -> AsyncGenerator[AccountStore]:
+    """Return an emptied store on the prefixed test tables."""
+    async with opened_store(_store(_policy())) as built:
+        yield built
 
 
 async def test_password_digest_is_salted_and_verifiable() -> None:
@@ -213,6 +221,19 @@ async def test_refund_returns_the_reserved_unit(store: AccountStore) -> None:
     assert (await store.snapshot(user.id)).remaining == _LIMIT
 
 
+async def test_reset_usage_clears_the_window_and_reports_unknown_names() -> None:
+    async with opened_store(_store(_policy(limit=5))) as store:
+        user = await store.register("reset-user", _PASSWORD, _EMAIL)
+        _ = await store.consume(user.id)
+        _ = await store.consume(user.id)
+        assert (await store.snapshot(user.id)).remaining == 3
+        reset = await store.reset_usage("reset-user")
+        assert reset is not None
+        assert reset.removed == 2
+        assert (await store.snapshot(user.id)).remaining == 5
+        assert await store.reset_usage("nobody") is None
+
+
 async def test_snapshot_counts_only_the_current_window(
     store: AccountStore,
     clock: _Clock,
@@ -238,14 +259,21 @@ async def test_snapshot_counts_only_the_current_window(
     assert rolled.reset_after_seconds == 0
 
 
-async def test_initialize_is_idempotent_and_creates_parent_directories(tmp_path: Path) -> None:
-    db_path = tmp_path / "nested" / "deep" / "accounts.db"
-    built = AccountStore(db_path, _policy())
-
-    await built.initialize()
-    await built.initialize()
-
-    assert db_path.is_file()
+async def test_initialize_tolerates_tables_that_already_exist() -> None:
+    # Every store in the run shares these tables, so preparing them through
+    # opened_store also empties whatever the tests before this one left behind.
+    async with opened_store(_store(_policy())) as first:
+        # Empty windows prove the tables exist and that nothing was carried in.
+        assert all(window.stats.users == 0 for window in await first.service_stats())
+        # The tables are in place by now, so this only passes if the creation
+        # path looks for them: MySQL answers an existing table with a warning,
+        # and a warning is an error under test.
+        second = _store(_policy())
+        try:
+            await second.initialize()
+            assert (await second.register("alice", _PASSWORD, _EMAIL)).id > 0
+        finally:
+            await second.close()
 
 
 async def test_service_stats_reports_every_window_shortest_first(store: AccountStore) -> None:
@@ -383,16 +411,15 @@ async def test_rebinding_to_a_taken_address_is_refused(store: AccountStore) -> N
     assert alice.id != bob.id
 
 
-async def test_resending_within_the_cooldown_is_refused(tmp_path: Path) -> None:
-    built = AccountStore(tmp_path / "accounts.db", _policy(resend=60.0))
-    await built.initialize()
-    user = await built.register("alice", _PASSWORD, _EMAIL)
-    _ = await built.open_verification(user.id, _EMAIL)
-
-    with pytest.raises(VerificationThrottledError) as refusal:
+async def test_resending_within_the_cooldown_is_refused() -> None:
+    async with opened_store(_store(_policy(resend=60.0))) as built:
+        user = await built.register("alice", _PASSWORD, _EMAIL)
         _ = await built.open_verification(user.id, _EMAIL)
 
-    assert refusal.value.retry_after_seconds > 0
+        with pytest.raises(VerificationThrottledError) as refusal:
+            _ = await built.open_verification(user.id, _EMAIL)
+
+        assert refusal.value.retry_after_seconds > 0
 
 
 async def test_discard_account_removes_every_trace(store: AccountStore) -> None:
@@ -408,44 +435,3 @@ async def test_discard_account_removes_every_trace(store: AccountStore) -> None:
     # The freed name and address can be registered again.
     again = await store.register("alice", _PASSWORD, _EMAIL)
     assert again.id != user.id
-
-
-async def test_an_older_database_gains_the_verification_columns(tmp_path: Path) -> None:
-    db_path = tmp_path / "legacy.db"
-    connection = sqlite3.connect(db_path)
-    _ = connection.executescript(
-        """
-        CREATE TABLE users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL COLLATE NOCASE UNIQUE,
-            password_hash TEXT NOT NULL,
-            created_at REAL NOT NULL
-        );
-        """
-    )
-    _ = connection.execute(
-        "INSERT INTO users(username, password_hash, created_at) VALUES(?, ?, ?)",
-        ("legacy", hash_password(_PASSWORD), 1.0),
-    )
-    _ = connection.commit()
-    connection.close()
-
-    built = AccountStore(db_path, _policy())
-    await built.initialize()
-
-    found = await built.authenticate("legacy", _PASSWORD)
-
-    assert found is not None
-    assert found.username == "legacy"
-    assert found.email is None
-    # An account from before this feature existed still has to confirm.
-    assert found.email_verified is False
-
-    email = "legacy@example.com"
-    token = await built.open_verification(found.id, email)
-    assert await built.verify_email(token) == User(
-        found.id,
-        "legacy",
-        email,
-        email_verified=True,
-    )

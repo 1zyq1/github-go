@@ -26,6 +26,7 @@ _SPA_PATH = "/"
 _LIMITED_PATH = "/?limited=1"
 _HEALTH_PATH = "/api/health"
 _OPTIONAL_PREFIX = "/api/auth/"
+_SSO_PREFIX = "/api/sso/"
 _API_PREFIX = "/api/"
 # Global protected routes; mirrored pages are routed by path everywhere else.
 _PROXY_PREFIX = "/proxy/"
@@ -66,6 +67,8 @@ class GatePolicy:
         if path.startswith(self.public_prefixes):
             return Gate.PUBLIC
         if path.startswith(_OPTIONAL_PREFIX):
+            return Gate.OPTIONAL
+        if path.startswith(_SSO_PREFIX):
             return Gate.OPTIONAL
         if path.startswith(_API_PREFIX):
             return Gate.REQUIRED

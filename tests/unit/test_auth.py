@@ -1,12 +1,12 @@
 """Unit tests for session-cookie authentication and quota metering."""
 
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TypedDict, cast
 
 import pytest
 import pytest_asyncio
-from app.accounts import AccountStore, StorePolicy, User, WindowStats
+from app.accounts import AccountStore, StorePolicy, User, WindowStats, mysql_target
 from app.auth import (
     SESSION_COOKIE_NAME,
     AuthMiddleware,
@@ -16,10 +16,13 @@ from app.auth import (
     current_user,
     session_token,
 )
+from app.config import Settings
 from app.errors import ErrorEnvelope
 from pydantic import TypeAdapter
 from starlette.requests import Request
 from starlette.types import Message, Receive, Scope, Send
+
+from tests.support import opened_store
 
 pytestmark = pytest.mark.asyncio
 
@@ -103,11 +106,16 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> _Clock:
     return frozen
 
 
+def _store(policy: StorePolicy) -> AccountStore:
+    """Build a store on the shared test tables with an explicit policy."""
+    return AccountStore(mysql_target(Settings()), policy)
+
+
 @pytest_asyncio.fixture(loop_scope="function")
-async def store(tmp_path: Path) -> AccountStore:
-    built = AccountStore(tmp_path / "accounts.db", _policy())
-    await built.initialize()
-    return built
+async def store() -> AsyncGenerator[AccountStore]:
+    """Return an emptied store on the prefixed test tables."""
+    async with opened_store(_store(_policy())) as built:
+        yield built
 
 
 async def _sign_in(store: AccountStore, username: str = "member") -> _Account:
@@ -491,18 +499,17 @@ async def test_gate_policy_without_a_frontend_meters_owned_paths(path: str) -> N
     assert GatePolicy().classify(path) == Gate.QUOTA
 
 
-async def test_a_delivered_access_is_reported_by_resource_kind(tmp_path: Path) -> None:
+async def test_a_delivered_access_is_reported_by_resource_kind() -> None:
     # A roomier allowance, because this test delivers two distinct resources.
-    store = AccountStore(tmp_path / "roomy.db", _policy(limit=2))
-    await store.initialize()
-    account = await _sign_in(store)
+    async with opened_store(_store(_policy(limit=2))) as store:
+        account = await _sign_in(store)
 
-    _ = await _call(store, _scope("/proxy/token-abc", cookie=_cookie(account.token)))
-    _ = await _call(store, _scope("/octocat/Hello-World", cookie=_cookie(account.token)))
+        _ = await _call(store, _scope("/proxy/token-abc", cookie=_cookie(account.token)))
+        _ = await _call(store, _scope("/octocat/Hello-World", cookie=_cookie(account.token)))
 
-    hour = (await store.service_stats())[0]
+        hour = (await store.service_stats())[0]
 
-    assert hour.stats == WindowStats(downloads=1, pages=1, users=1)
+        assert hour.stats == WindowStats(downloads=1, pages=1, users=1)
 
 
 async def test_a_refunded_access_is_absent_from_the_report(store: AccountStore) -> None:

@@ -3,6 +3,7 @@
 import anyio
 import httpx2
 import pytest
+from app.accounts import AccountStore
 from app.main import create_app
 from app.schemas import HealthResponse
 from pydantic import TypeAdapter
@@ -12,13 +13,19 @@ pytestmark = pytest.mark.asyncio
 _EXPECTED = HealthResponse()
 
 
-async def test_health_reports_ready_without_contacting_github() -> None:
+async def test_health_reports_ready_without_contacting_github(
+    account_store: AccountStore,
+) -> None:
     upstream = httpx2.AsyncClient(
         transport=httpx2.MockTransport(lambda _request: httpx2.Response(500))
     )
     api = httpx2.AsyncClient(
         transport=httpx2.ASGITransport(
-            app=create_app(upstream_client=upstream, capacity_limiter=anyio.CapacityLimiter(1))
+            app=create_app(
+                upstream_client=upstream,
+                capacity_limiter=anyio.CapacityLimiter(1),
+                account_store=account_store,
+            )
         ),
         base_url="http://test",
     )

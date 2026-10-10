@@ -7,6 +7,7 @@ from typing import override
 import anyio
 import httpx2
 import pytest
+from app.accounts import AccountStore
 from app.config import Settings
 from app.main import create_app
 from app.url_policy import encode_proxy_token
@@ -50,14 +51,9 @@ class _Stream(httpx2.AsyncByteStream):
         pass
 
 
-_ACCOUNTS_DB = "accounts.db"
-
-
 def _cache_names(directory: Path) -> list[str]:
-    """List cache entries, ignoring the account database the harness parks here."""
-    return sorted(
-        entry.name for entry in directory.iterdir() if not entry.name.startswith(_ACCOUNTS_DB)
-    )
+    """List the cache entries a directory holds."""
+    return sorted(entry.name for entry in directory.iterdir())
 
 
 def _archive_response(payload: bytes, *, gate: anyio.Event | None = None) -> httpx2.Response:
@@ -69,6 +65,7 @@ def _archive_response(payload: bytes, *, gate: anyio.Event | None = None) -> htt
 
 
 async def _clients(
+    account_store: AccountStore,
     tmp_path: Path,
     handler: Callable[[httpx2.Request], httpx2.Response],
     *,
@@ -84,6 +81,7 @@ async def _clients(
         upstream_client=upstream,
         capacity_limiter=anyio.CapacityLimiter(8),
         mailer=RecordingMailer(),
+        account_store=account_store,
     )
     api = httpx2.AsyncClient(
         transport=httpx2.ASGITransport(app=app, raise_app_exceptions=False),
@@ -92,14 +90,16 @@ async def _clients(
     return upstream, await sign_in(api)
 
 
-async def test_second_request_is_served_from_disk(tmp_path: Path) -> None:
+async def test_second_request_is_served_from_disk(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return _archive_response(_PAYLOAD)
 
-    upstream, api = await _clients(tmp_path, handler, cache_bytes=1_000_000)
+    upstream, api = await _clients(account_store, tmp_path, handler, cache_bytes=1_000_000)
     try:
         first = await api.get(f"/proxy/{_ARCHIVE_TOKEN}")
         second = await api.get(f"/proxy/{_ARCHIVE_TOKEN}")
@@ -114,14 +114,16 @@ async def test_second_request_is_served_from_disk(tmp_path: Path) -> None:
     assert len(requests) == 1
 
 
-async def test_cached_archive_supports_range_requests(tmp_path: Path) -> None:
+async def test_cached_archive_supports_range_requests(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return _archive_response(_PAYLOAD)
 
-    upstream, api = await _clients(tmp_path, handler, cache_bytes=1_000_000)
+    upstream, api = await _clients(account_store, tmp_path, handler, cache_bytes=1_000_000)
     try:
         _ = await api.get(f"/proxy/{_ARCHIVE_TOKEN}")
         ranged = await api.get(
@@ -138,14 +140,16 @@ async def test_cached_archive_supports_range_requests(tmp_path: Path) -> None:
     assert len(requests) == 1
 
 
-async def test_range_request_does_not_populate_the_cache(tmp_path: Path) -> None:
+async def test_range_request_does_not_populate_the_cache(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return _archive_response(_PAYLOAD)
 
-    upstream, api = await _clients(tmp_path, handler, cache_bytes=1_000_000)
+    upstream, api = await _clients(account_store, tmp_path, handler, cache_bytes=1_000_000)
     try:
         ranged = await api.get(f"/proxy/{_ARCHIVE_TOKEN}", headers={"Range": "bytes=0-3"})
         after_range = _cache_names(tmp_path)
@@ -160,7 +164,9 @@ async def test_range_request_does_not_populate_the_cache(tmp_path: Path) -> None
     assert len(requests) == 2
 
 
-async def test_concurrent_requests_share_one_upstream_fetch(tmp_path: Path) -> None:
+async def test_concurrent_requests_share_one_upstream_fetch(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     requests: list[httpx2.Request] = []
     gate = anyio.Event()
 
@@ -168,7 +174,7 @@ async def test_concurrent_requests_share_one_upstream_fetch(tmp_path: Path) -> N
         requests.append(request)
         return _archive_response(_PAYLOAD, gate=gate)
 
-    upstream, api = await _clients(tmp_path, handler, cache_bytes=1_000_000)
+    upstream, api = await _clients(account_store, tmp_path, handler, cache_bytes=1_000_000)
     bodies: list[bytes] = []
 
     async def fetch() -> None:
@@ -189,14 +195,14 @@ async def test_concurrent_requests_share_one_upstream_fetch(tmp_path: Path) -> N
     assert bodies == [_PAYLOAD, _PAYLOAD]
 
 
-async def test_zero_cap_disables_caching(tmp_path: Path) -> None:
+async def test_zero_cap_disables_caching(tmp_path: Path, account_store: AccountStore) -> None:
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return _archive_response(_PAYLOAD)
 
-    upstream, api = await _clients(tmp_path, handler, cache_bytes=0)
+    upstream, api = await _clients(account_store, tmp_path, handler, cache_bytes=0)
     try:
         first = await api.get(f"/proxy/{_ARCHIVE_TOKEN}")
         second = await api.get(f"/proxy/{_ARCHIVE_TOKEN}")
@@ -210,14 +216,14 @@ async def test_zero_cap_disables_caching(tmp_path: Path) -> None:
     assert _cache_names(tmp_path) == []
 
 
-async def test_raw_content_is_never_cached(tmp_path: Path) -> None:
+async def test_raw_content_is_never_cached(tmp_path: Path, account_store: AccountStore) -> None:
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return httpx2.Response(200, headers={"content-type": "text/plain"}, content=b"hello")
 
-    upstream, api = await _clients(tmp_path, handler, cache_bytes=1_000_000)
+    upstream, api = await _clients(account_store, tmp_path, handler, cache_bytes=1_000_000)
     try:
         first = await api.get(f"/proxy/{_RAW_TOKEN}")
         second = await api.get(f"/proxy/{_RAW_TOKEN}")
@@ -231,14 +237,16 @@ async def test_raw_content_is_never_cached(tmp_path: Path) -> None:
     assert _cache_names(tmp_path) == []
 
 
-async def test_failed_leader_does_not_strand_followers(tmp_path: Path) -> None:
+async def test_failed_leader_does_not_strand_followers(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requests.append(request)
         return httpx2.Response(404, headers={}, content=b"")
 
-    upstream, api = await _clients(tmp_path, handler, cache_bytes=1_000_000)
+    upstream, api = await _clients(account_store, tmp_path, handler, cache_bytes=1_000_000)
     codes: list[int] = []
 
     async def fetch() -> None:
@@ -257,7 +265,9 @@ async def test_failed_leader_does_not_strand_followers(tmp_path: Path) -> None:
     assert len(requests) == 2
 
 
-async def test_midstream_failure_leaves_no_entry_and_a_usable_flight(tmp_path: Path) -> None:
+async def test_midstream_failure_leaves_no_entry_and_a_usable_flight(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -270,7 +280,7 @@ async def test_midstream_failure_leaves_no_entry_and_a_usable_flight(tmp_path: P
             )
         return _archive_response(_PAYLOAD)
 
-    upstream, api = await _clients(tmp_path, handler, cache_bytes=1_000_000)
+    upstream, api = await _clients(account_store, tmp_path, handler, cache_bytes=1_000_000)
     try:
         first = await api.get(f"/proxy/{_ARCHIVE_TOKEN}")
         second = await api.get(f"/proxy/{_ARCHIVE_TOKEN}")

@@ -5,9 +5,11 @@ import secrets
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlencode
 
 import anyio
 import httpx2
@@ -26,10 +28,10 @@ from app.accounts import (
     EmailTakenError,
     QuotaSnapshot,
     StatWindow,
-    StorePolicy,
     User,
     UsernameTakenError,
     VerificationThrottledError,
+    build_account_store,
 )
 from app.auth import (
     SESSION_COOKIE_NAME,
@@ -55,6 +57,13 @@ from app.schemas import (
     StatsResponse,
     StatsWindowView,
     VerificationRequest,
+)
+from app.sso import (
+    issue_assertion,
+    parse_assertion,
+    sign_state,
+    sso_username,
+    verify_state,
 )
 from app.upstream import build_upstream_client
 from app.url_policy import PageKind, encode_proxy_token, parse_page_url, parse_source_url
@@ -88,20 +97,6 @@ def _build_archive_cache(settings: Settings) -> ArchiveCache | None:
     return ArchiveCache(settings.archive_cache_dir, settings.archive_cache_max_bytes)
 
 
-def _build_account_store(settings: Settings) -> AccountStore:
-    """Build the account store for the configured quota and mail policy."""
-    return AccountStore(
-        settings.accounts_db_path,
-        StorePolicy(
-            limit=settings.usage_limit,
-            window_seconds=float(settings.usage_window_seconds),
-            session_ttl_seconds=float(settings.session_ttl_seconds),
-            verification_ttl_seconds=float(settings.verification_ttl_seconds),
-            verification_resend_seconds=float(settings.verification_resend_seconds),
-        ),
-    )
-
-
 def _spa_gate_policy(settings: Settings) -> GatePolicy:
     """Derive the unauthenticated surface from what the frontend actually owns.
 
@@ -116,7 +111,20 @@ def _spa_gate_policy(settings: Settings) -> GatePolicy:
         # ``/stats`` is the shell's second entry point and its report is meant to
         # be readable by anyone, so both stay open. The trailing-slash form is
         # listed because the router only normalizes it after the gate has run.
-        public_exact=frozenset({"/", "/api/stats", "/favicon.svg", "/stats", "/stats/"}),
+        # The crawl documents are open for the same reason: a robot that meets a
+        # 401 records nothing but an error.
+        public_exact=frozenset(
+            {
+                "/",
+                "/api/stats",
+                "/favicon.svg",
+                "/og.png",
+                "/robots.txt",
+                "/sitemap.xml",
+                "/stats",
+                "/stats/",
+            }
+        ),
         public_prefixes=prefixes,
     )
 
@@ -299,16 +307,21 @@ def _build_session_response(
     )
     response = JSONResponse(content=body.model_dump())
     if token is not None:
-        response.set_cookie(
-            SESSION_COOKIE_NAME,
-            token,
-            max_age=settings.session_ttl_seconds,
-            httponly=True,
-            samesite="lax",
-            secure=settings.session_cookie_secure,
-            path="/",
-        )
+        _set_session_cookie(response, settings, token)
     return response
+
+
+def _set_session_cookie(response: Response, settings: Settings, token: str) -> None:
+    """Attach the cookie that carries the whole access grant."""
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=settings.session_ttl_seconds,
+        httponly=True,
+        samesite="lax",
+        secure=settings.session_cookie_secure,
+        path="/",
+    )
 
 
 def _build_stats_response(windows: tuple[StatWindow, ...]) -> StatsResponse:
@@ -442,6 +455,7 @@ def _wants_json(request: Request) -> bool:
 
 async def _complete_verification(
     store: AccountStore,
+    settings: Settings,
     token: str,
     *,
     wants_json: bool,
@@ -449,8 +463,12 @@ async def _complete_verification(
     """Consume a verification token and land the recipient somewhere useful.
 
     A mailed link is opened in a browser, so the outcome is reported by
-    redirecting to the shell with a flag the page can render. A script or a
-    test client gets the same outcome as JSON.
+    redirecting to the shell with a flag the page can render. Whoever opens a
+    valid link has just proved control of the address, so that browser is also
+    signed in on the way out: the landing page is already authenticated, and
+    any other tab of the same browser adopts the cookie on its next read. A
+    script or a test client gets the outcome as JSON and no cookie, because it
+    can ask to sign in explicitly.
     """
     user = await store.verify_email(token)
     if user is None:
@@ -466,7 +484,9 @@ async def _complete_verification(
             email_verified=True,
         )
         return JSONResponse(content=body.model_dump())
-    return RedirectResponse("/?verified=1", status_code=303)
+    response = RedirectResponse("/?verified=1", status_code=303)
+    _set_session_cookie(response, settings, await store.open_session(user.id))
+    return response
 
 
 async def _logout_session(store: AccountStore, token: str | None) -> JSONResponse:
@@ -524,7 +544,116 @@ def _register_auth_routes(
     @application.get("/api/auth/verify")
     async def verify(request: Request, token: str = "") -> Response:
         """Consume one verification token from a mailed link."""
-        return await _complete_verification(store, token, wants_json=_wants_json(request))
+        return await _complete_verification(store, settings, token, wants_json=_wants_json(request))
+
+
+def _sso_append_query(url: str, params: dict[str, str]) -> str:
+    """Append non-empty parameters to a URL, reusing an existing separator."""
+    query = urlencode({key: value for key, value in params.items() if value})
+    if not query:
+        return url
+    return f"{url}{'&' if '?' in url else '?'}{query}"
+
+
+def _is_local_host(host: str) -> bool:
+    """Whether a host is loopback or a private address, so it may stay http."""
+    if host in {"localhost", "127.0.0.1", "::1", "[::1]"} or host.endswith(".local"):
+        return True
+    if host.startswith(("10.", "192.168.")):
+        return True
+    return any(host.startswith(f"172.{number}.") for number in range(16, 32))
+
+
+def _sso_self_callback(settings: Settings, request: Request) -> str:
+    """This service's own SSO callback URL, configured or derived from the request."""
+    configured = settings.sso_self_callback_url.strip()
+    if configured:
+        return configured
+    scheme = request.url.scheme
+    host = request.url.hostname or ""
+    if scheme == "http" and host and not _is_local_host(host):
+        # A TLS-terminating proxy may not forward the scheme, so non-local hosts
+        # are assumed to be served over HTTPS.
+        scheme = "https"
+    port = request.url.port
+    netloc = host if port in (None, 80, 443) else f"{host}:{port}"
+    return f"{scheme}://{netloc}/api/sso/callback"
+
+
+def _sso_unavailable() -> AppError:
+    """Build the failure used when SSO is not configured."""
+    return AppError("sso_unavailable", "单点登录未配置。", 503)
+
+
+def _sso_invalid_redirect() -> AppError:
+    """Build the failure used when an authorize redirect_uri is not allowed."""
+    return AppError("invalid_redirect", "非法的回跳地址。", 400)
+
+
+def _register_sso_routes(  # noqa: C901
+    application: FastAPI,
+    store: AccountStore,
+    settings: Settings,
+) -> None:
+    """Register the cross-site SSO endpoints shared with the blog."""
+
+    @application.get("/api/sso/providers", include_in_schema=False)
+    async def sso_providers() -> JSONResponse:
+        """Tell the SPA whether the blog SSO button should be shown."""
+        return JSONResponse({"blog": settings.sso_enabled})
+
+    @application.get("/api/sso/start", include_in_schema=False)
+    async def sso_start(request: Request, redirect: str = "/") -> Response:
+        """As the RP, sign a state and bounce the browser to the blog authorize."""
+        if not settings.sso_enabled:
+            raise _sso_unavailable()
+        state = sign_state(settings, redirect)
+        target = _sso_append_query(
+            settings.sso_peer_authorize_url.strip(),
+            {"redirect_uri": _sso_self_callback(settings, request), "state": state},
+        )
+        return RedirectResponse(target, status_code=302)
+
+    @application.get("/api/sso/authorize", include_in_schema=False)
+    async def sso_authorize(request: Request, redirect_uri: str = "", state: str = "") -> Response:
+        """As the IdP, sign an assertion for a signed-in user, or send them to login."""
+        if not settings.sso_enabled:
+            raise _sso_unavailable()
+        allowed = settings.sso_peer_callback_url.strip()
+        if not allowed or redirect_uri != allowed:
+            raise _sso_invalid_redirect()
+        user = current_user(request)
+        if user is not None:
+            assertion = issue_assertion(settings, user)
+            return RedirectResponse(
+                _sso_append_query(redirect_uri, {"assertion": assertion, "state": state}),
+                status_code=302,
+            )
+        # Not signed in: the SPA home shows the auth panel and, once the visitor is
+        # signed in, sends them back to this authorize URL (now with a session).
+        return_to = request.url.path
+        if request.url.query:
+            return_to = f"{return_to}?{request.url.query}"
+        return RedirectResponse(_sso_append_query("/", {"sso_return": return_to}), status_code=302)
+
+    @application.get("/api/sso/callback", include_in_schema=False)
+    async def sso_callback(assertion: str = "", state: str = "") -> Response:
+        """As the RP, verify the blog's assertion, open an account, and sign in."""
+        if not settings.sso_enabled:
+            raise _sso_unavailable()
+        try:
+            return_path = verify_state(settings, state)
+            identity = parse_assertion(settings, assertion)
+            user = await store.open_sso_account(identity.email, sso_username(identity.username))
+            token = await store.open_session(user.id)
+        except AppError as error:
+            return RedirectResponse(
+                _sso_append_query("/", {"sso": "error", "message": error.message}),
+                status_code=303,
+            )
+        response = RedirectResponse(_sso_append_query(return_path, {"sso": "ok"}), status_code=303)
+        _set_session_cookie(response, settings, token)
+        return response
 
 
 def _register_stats_routes(application: FastAPI, store: AccountStore) -> None:
@@ -555,6 +684,46 @@ def _static_app(directory_name: str, directory: Path) -> ASGIApp:
     return static
 
 
+_CRAWL_CACHE_HEADERS: dict[str, str] = {"cache-control": "public, max-age=3600"}
+
+
+def _canonical_base(settings: Settings) -> str:
+    """Return the origin this deployment is published under, without a slash."""
+    return settings.public_base_url.rstrip("/")
+
+
+def _robots_document(settings: Settings) -> str:
+    """Build the crawl policy for the paths this deployment actually serves.
+
+    The API and the mirror are disallowed because a crawler that follows them
+    would publish other people's repositories under this address.
+    """
+    return (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /api/\n"
+        "Disallow: /proxy/\n"
+        "\n"
+        f"Sitemap: {_canonical_base(settings)}/sitemap.xml\n"
+    )
+
+
+def _sitemap_document(settings: Settings, index: Path) -> str:
+    """List the two entry points the shell answers, dated by the build itself."""
+    base = _canonical_base(settings)
+    lastmod = datetime.fromtimestamp(index.stat().st_mtime, tz=UTC).date().isoformat()
+    entries = "".join(
+        f"  <url><loc>{base}{path}</loc><lastmod>{lastmod}</lastmod></url>\n"
+        for path in ("/", "/stats")
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{entries}"
+        "</urlset>\n"
+    )
+
+
 def _register_static_assets(application: FastAPI, settings: Settings) -> None:
     """Serve the built single-page app from the paths the build actually owns.
 
@@ -576,6 +745,7 @@ def _register_static_assets(application: FastAPI, settings: Settings) -> None:
                 name=f"spa-{directory_name}",
             )
     favicon = static_dir / "favicon.svg"
+    _register_crawl_documents(application, settings, static_dir, index)
 
     @application.get("/", include_in_schema=False)
     @application.get("/stats", include_in_schema=False)
@@ -597,6 +767,41 @@ def _register_static_assets(application: FastAPI, settings: Settings) -> None:
         if not favicon.is_file():
             raise StarletteHTTPException(status_code=_NOT_FOUND_STATUS)
         return FileResponse(favicon)
+
+
+def _register_crawl_documents(
+    application: FastAPI,
+    settings: Settings,
+    static_dir: Path,
+    index: Path,
+) -> None:
+    """Serve the crawl documents and the social preview card.
+
+    They are generated here instead of shipped with the build, so the origin
+    they advertise is the one this process was told to publish under. The gate
+    policy lists all three as public, because a crawler that meets a 401
+    records nothing but an error.
+    """
+    robots = _robots_document(settings)
+    sitemap = _sitemap_document(settings, index)
+    preview = static_dir / "og.png"
+
+    @application.get("/robots.txt", include_in_schema=False)
+    async def spa_robots() -> Response:
+        """Answer crawlers directly, so they never index the mirror instead."""
+        return Response(robots, media_type="text/plain", headers=_CRAWL_CACHE_HEADERS)
+
+    @application.get("/sitemap.xml", include_in_schema=False)
+    async def spa_sitemap() -> Response:
+        """Publish both entry points instead of leaving them to be guessed."""
+        return Response(sitemap, media_type="application/xml", headers=_CRAWL_CACHE_HEADERS)
+
+    @application.get("/og.png", include_in_schema=False)
+    async def spa_preview() -> Response:
+        """Return the social preview card, or the JSON envelope when absent."""
+        if not preview.is_file():
+            raise StarletteHTTPException(status_code=_NOT_FOUND_STATUS)
+        return FileResponse(preview)
 
 
 def _register_web_proxy(
@@ -626,20 +831,23 @@ def _register_web_proxy(
         )
 
 
-def create_app(
+def create_app(  # noqa: PLR0915
     settings: Settings | None = None,
     *,
     upstream_client: httpx2.AsyncClient | None = None,
     capacity_limiter: anyio.CapacityLimiter | None = None,
     mailer: Mailer | None = None,
+    account_store: AccountStore | None = None,
 ) -> FastAPI:
     """Create an application instance with safe API and proxy routes."""
     app_settings = settings or Settings()
     archive_cache = _build_archive_cache(app_settings)
     gate_policy = _spa_gate_policy(app_settings)
-    # Unlike the proxy services below, the store is pure configuration plus a
-    # schema created on first use, so it needs no lifespan to exist.
-    account_store = _build_account_store(app_settings)
+    # One pool serves the whole process. It is created lazily, because the tests
+    # build the application without running the ASGI lifespan, and it is only
+    # closed here when this function is what opened it.
+    store = account_store if account_store is not None else build_account_store(app_settings)
+    owns_store = account_store is None
     # Injected by tests, which must not reach a real mail server; otherwise the
     # configured transport decides whether a message is actually sent.
     mailer_service = mailer if mailer is not None else build_mailer(app_settings)
@@ -663,7 +871,7 @@ def create_app(
         nonlocal proxy_service, web_page_proxy
         client = upstream_client or build_upstream_client(app_settings)
         limiter = capacity_limiter or anyio.CapacityLimiter(app_settings.max_concurrent_proxies)
-        await account_store.initialize()
+        await store.initialize()
         proxy_service = ProxyService(client, limiter, archive_cache)
         web_page_proxy = WebPageProxy(client)
         try:
@@ -673,6 +881,8 @@ def create_app(
                 await client.aclose()
             proxy_service = None
             web_page_proxy = None
+            if owns_store:
+                await store.close()
 
     application = FastAPI(
         title="GitHub Accelerator",
@@ -683,7 +893,7 @@ def create_app(
     # Sits outside the body limit so an unauthenticated or over-quota request is
     # rejected before any of its body is read, and inside the security-headers
     # layer so its own 401/429/302 responses still carry the policy.
-    application.add_middleware(AuthMiddleware, store=account_store, policy=gate_policy)
+    application.add_middleware(AuthMiddleware, store=store, policy=gate_policy)
     application.add_middleware(SecurityHeadersMiddleware)
     if app_settings.trusted_hosts:
         # Added last so it becomes the outermost layer and rejects a forged Host
@@ -695,14 +905,16 @@ def create_app(
     _register_request_logging(application)
     _register_exception_handlers(application)
     _register_routes(application, current_proxy_service)
-    _register_auth_routes(application, account_store, app_settings, mailer_service)
-    _register_stats_routes(application, account_store)
+    _register_auth_routes(application, store, app_settings, mailer_service)
+    _register_sso_routes(application, store, app_settings)
+    _register_stats_routes(application, store)
     _register_static_assets(application, app_settings)
     _register_web_proxy(application, current_web_page_proxy)
 
     if upstream_client is not None and capacity_limiter is not None:
         # This path exists so tests can drive the application without running
-        # the ASGI lifespan; the store above needs no such treatment.
+        # the ASGI lifespan; the account store above needs no such treatment
+        # because it brings its own pool up on the first request.
         proxy_service = ProxyService(upstream_client, capacity_limiter, archive_cache)
         web_page_proxy = WebPageProxy(upstream_client)
     return application

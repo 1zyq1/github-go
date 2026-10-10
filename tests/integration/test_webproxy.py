@@ -7,6 +7,7 @@ from pathlib import Path
 import anyio
 import httpx2
 import pytest
+from app.accounts import AccountStore
 from app.config import Settings
 from app.errors import ErrorEnvelope
 from app.htmlmirror import is_rewritable_html, mirror_body
@@ -49,7 +50,11 @@ class _Upstream:
 
 
 @asynccontextmanager
-async def _browse(upstream: _Upstream, tmp_path: Path) -> AsyncGenerator[httpx2.AsyncClient]:
+async def _browse(
+    account_store: AccountStore,
+    upstream: _Upstream,
+    tmp_path: Path,
+) -> AsyncGenerator[httpx2.AsyncClient]:
     upstream_client = upstream.client()
     api = httpx2.AsyncClient(
         transport=httpx2.ASGITransport(
@@ -58,6 +63,7 @@ async def _browse(upstream: _Upstream, tmp_path: Path) -> AsyncGenerator[httpx2.
                 upstream_client=upstream_client,
                 capacity_limiter=anyio.CapacityLimiter(1),
                 mailer=RecordingMailer(),
+                account_store=account_store,
             )
         ),
         base_url="http://test",
@@ -74,10 +80,12 @@ def _error_code(response: httpx2.Response) -> str:
     return payload["error"]["code"]
 
 
-async def test_profile_path_is_mirrored_from_github(tmp_path: Path) -> None:
+async def test_profile_path_is_mirrored_from_github(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/1zyq1")
 
     assert response.status_code == 200
@@ -85,10 +93,10 @@ async def test_profile_path_is_mirrored_from_github(tmp_path: Path) -> None:
     assert [str(call.url) for call in upstream.calls] == ["https://github.com/1zyq1"]
 
 
-async def test_query_string_is_preserved(tmp_path: Path) -> None:
+async def test_query_string_is_preserved(tmp_path: Path, account_store: AccountStore) -> None:
     upstream = _Upstream()
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/acme/widgets", params={"tab": "readme-ov-file"})
 
     assert response.status_code == 200
@@ -97,10 +105,12 @@ async def test_query_string_is_preserved(tmp_path: Path) -> None:
     ]
 
 
-async def test_client_credentials_are_not_forwarded(tmp_path: Path) -> None:
+async def test_client_credentials_are_not_forwarded(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         # Attach the extra cookie alongside the session cookie the guard needs,
         # rather than replacing it; none of these may reach GitHub, the session
         # cookie included.
@@ -120,12 +130,14 @@ async def test_client_credentials_are_not_forwarded(tmp_path: Path) -> None:
     assert "x-forwarded-for" not in sent
 
 
-async def test_github_redirect_is_rewritten_to_this_origin(tmp_path: Path) -> None:
+async def test_github_redirect_is_rewritten_to_this_origin(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
     upstream.status_code = 302
     upstream.headers = {"location": "https://github.com/login"}
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/settings")
 
     assert response.status_code == 302
@@ -133,22 +145,26 @@ async def test_github_redirect_is_rewritten_to_this_origin(tmp_path: Path) -> No
     assert response.content == b""
 
 
-async def test_foreign_redirect_is_passed_through(tmp_path: Path) -> None:
+async def test_foreign_redirect_is_passed_through(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
     upstream.status_code = 301
     upstream.headers = {"location": "https://example.com/away"}
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/acme/widgets")
 
     assert response.status_code == 301
     assert response.headers["location"] == "https://example.com/away"
 
 
-async def test_page_policy_allows_assets_but_refuses_scripts(tmp_path: Path) -> None:
+async def test_page_policy_allows_assets_but_refuses_scripts(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/1zyq1")
 
     policy = response.headers["content-security-policy"]
@@ -158,34 +174,49 @@ async def test_page_policy_allows_assets_but_refuses_scripts(tmp_path: Path) -> 
     assert "base-uri 'self'" in policy
 
 
-async def test_upstream_set_cookie_is_not_forwarded(tmp_path: Path) -> None:
+async def test_a_mirrored_page_is_kept_out_of_search_results(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
+    upstream = _Upstream()
+
+    async with _browse(account_store, upstream, tmp_path) as api:
+        response = await api.get("/1zyq1")
+
+    assert response.headers["x-robots-tag"] == "noindex, nofollow"
+
+
+async def test_upstream_set_cookie_is_not_forwarded(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
     upstream.headers = {
         "content-type": "text/html; charset=utf-8",
         "set-cookie": "session=secret; Path=/",
     }
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/1zyq1")
 
     assert response.status_code == 200
     assert "set-cookie" not in response.headers
 
 
-async def test_head_request_has_no_body(tmp_path: Path) -> None:
+async def test_head_request_has_no_body(tmp_path: Path, account_store: AccountStore) -> None:
     upstream = _Upstream()
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.head("/1zyq1")
 
     assert response.status_code == 200
     assert response.content == b""
 
 
-async def test_archive_path_is_handed_to_the_file_proxy(tmp_path: Path) -> None:
+async def test_archive_path_is_handed_to_the_file_proxy(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get(f"/{_ARCHIVE_PATH}")
 
     assert response.status_code == 302
@@ -197,10 +228,12 @@ async def test_archive_path_is_handed_to_the_file_proxy(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", ["/api/does-not-exist", "/proxy/token/extra"])
-async def test_reserved_prefixes_never_reach_github(tmp_path: Path, path: str) -> None:
+async def test_reserved_prefixes_never_reach_github(
+    tmp_path: Path, path: str, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get(path)
 
     assert response.status_code == 404
@@ -209,10 +242,12 @@ async def test_reserved_prefixes_never_reach_github(tmp_path: Path, path: str) -
 
 
 @pytest.mark.parametrize("path", ["/a%5Cb", "/a/%2e%2e/b"])
-async def test_malformed_path_is_rejected(tmp_path: Path, path: str) -> None:
+async def test_malformed_path_is_rejected(
+    tmp_path: Path, path: str, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get(path)
 
     assert response.status_code == 400
@@ -220,11 +255,13 @@ async def test_malformed_path_is_rejected(tmp_path: Path, path: str) -> None:
     assert upstream.calls == []
 
 
-async def test_scripts_are_stripped_from_mirrored_markup(tmp_path: Path) -> None:
+async def test_scripts_are_stripped_from_mirrored_markup(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
     upstream.body = _MARKUP
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/1zyq1")
 
     assert response.status_code == 200
@@ -233,22 +270,26 @@ async def test_scripts_are_stripped_from_mirrored_markup(tmp_path: Path) -> None
     assert "<p>kept text</p>" in response.text
 
 
-async def test_content_length_is_dropped_when_the_body_is_rewritten(tmp_path: Path) -> None:
+async def test_content_length_is_dropped_when_the_body_is_rewritten(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
     upstream.body = _MARKUP
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/1zyq1")
 
     assert "content-length" not in response.headers
 
 
-async def test_non_html_body_is_passed_through_unchanged(tmp_path: Path) -> None:
+async def test_non_html_body_is_passed_through_unchanged(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
     upstream.headers = {"content-type": "application/json"}
     upstream.body = '{"kept": "<script>not markup</script>"}'
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/1zyq1")
 
     assert response.text == '{"kept": "<script>not markup</script>"}'
@@ -270,12 +311,14 @@ async def test_rewrite_guard_and_body_size_limit() -> None:
     assert b"".join([chunk async for chunk in mirror_body(response, 16)]) == oversized
 
 
-async def test_mirrored_page_is_gzipped_when_the_client_accepts_it(tmp_path: Path) -> None:
+async def test_mirrored_page_is_gzipped_when_the_client_accepts_it(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
     upstream.body = _MARKUP
     upstream.headers["vary"] = "Cookie"
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/1zyq1", headers={"accept-encoding": "gzip, deflate, br"})
 
     assert response.headers["content-encoding"] == "gzip"
@@ -285,11 +328,13 @@ async def test_mirrored_page_is_gzipped_when_the_client_accepts_it(tmp_path: Pat
     assert "<script" not in response.text
 
 
-async def test_mirrored_page_stays_plain_without_gzip_support(tmp_path: Path) -> None:
+async def test_mirrored_page_stays_plain_without_gzip_support(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
     upstream = _Upstream()
     upstream.body = _MARKUP
 
-    async with _browse(upstream, tmp_path) as api:
+    async with _browse(account_store, upstream, tmp_path) as api:
         response = await api.get("/1zyq1", headers={"accept-encoding": "identity"})
 
     assert "content-encoding" not in response.headers

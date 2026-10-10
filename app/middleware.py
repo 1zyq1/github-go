@@ -12,13 +12,16 @@ _HEADER_PAIR_LENGTH = 2
 # Every POST that carries credentials or a URL is bounded, so an oversized body
 # is rejected before the application reads it into memory.
 _LIMITED_PATHS = frozenset({"/api/resolve", "/api/auth/register", "/api/auth/login"})
+# The shell loads exactly one third-party script -- the Umami tracker -- and it
+# reports to its own gateway, so both origins are named explicitly instead of
+# opening ``script-src`` and ``connect-src`` with a bare scheme source.
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
-    "script-src 'self'; "
+    "script-src 'self' https://cloud.umami.is; "
     "style-src 'self'; "
     "font-src 'self'; "
     "img-src 'self'; "
-    "connect-src 'self'; "
+    "connect-src 'self' https://cloud.umami.is https://gateway.umami.is; "
     "form-action 'self'; "
     "base-uri 'none'; "
     "object-src 'none'; "

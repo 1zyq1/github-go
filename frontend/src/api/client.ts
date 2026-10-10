@@ -425,6 +425,29 @@ export async function logout(): Promise<void> {
   }
 }
 
+/**
+ * Whether the blog cross-site single sign-on is configured.
+ *
+ * The backend returns ``{"blog": true}`` only when it shares a secret with the
+ * blog, so the "用博客账号登录" button is hidden otherwise. A failure is reported
+ * as unavailable rather than thrown: the panel simply omits the button.
+ */
+export async function fetchSsoProviders(): Promise<boolean> {
+  try {
+    const { response, payload } = await sendJson("/api/sso/providers", {
+      method: "GET",
+      mode: "same-origin",
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) {
+      return false;
+    }
+    return isRecord(payload) && payload["blog"] === true;
+  } catch {
+    return false;
+  }
+}
+
 /** The windows the server publishes, in the order it publishes them. */
 const STAT_WINDOW_KEYS = ["hour", "day", "week", "month", "total"] as const;
 

@@ -1,6 +1,11 @@
-import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
+import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AuthPanel from "../src/components/AuthPanel.vue";
+
+// Every wrapper is unmounted after its test, which is what lets the pending view
+// drop its `visibilitychange` listener instead of leaving it on the document for
+// a later test to trip over.
+enableAutoUnmount(afterEach);
 
 const fetchMock = vi.fn<(input: string, init: RequestInit) => Promise<unknown>>();
 
@@ -38,6 +43,11 @@ function lastCall(): readonly [string, RequestInit] {
     throw new Error("expected the panel to call the API");
   }
   return call;
+}
+
+/** The number of auth calls, ignoring the SSO provider probe made on mount. */
+function authCalls(): number {
+  return fetchMock.mock.calls.filter(([input]) => input !== "/api/sso/providers").length;
 }
 
 async function submit(
@@ -81,7 +91,7 @@ describe("AuthPanel", () => {
     expect(view.get<HTMLInputElement>("input[type='radio'][value='login']").element.checked).toBe(
       true,
     );
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(authCalls()).toBe(0);
   });
 
   it("states the hourly allowance in the lead copy", () => {
@@ -106,7 +116,7 @@ describe("AuthPanel", () => {
     await submit(view, "   ", "secret123");
 
     expect(view.get("[data-test='username-error']").text()).toBe("请填写用户名。");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(authCalls()).toBe(0);
   });
 
   it("rejects a username that breaks the registration shape", async () => {
@@ -116,7 +126,7 @@ describe("AuthPanel", () => {
     await submit(view, "ab", "12345678");
 
     expect(view.get("[data-test='username-error']").text()).toContain("3 至 32 位");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(authCalls()).toBe(0);
   });
 
   it("rejects a short registration password", async () => {
@@ -126,7 +136,7 @@ describe("AuthPanel", () => {
     await submit(view, "alice", "1234567");
 
     expect(view.get("[data-test='password-error']").text()).toBe("密码长度需为 8 至 128 位。");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(authCalls()).toBe(0);
   });
 
   it("marks only the offending field as invalid", async () => {
@@ -241,7 +251,7 @@ describe("AuthPanel", () => {
     await submit(view, "alice", "12345678", "nobody@example");
 
     expect(view.get("[data-test='email-error']").text()).toContain("有效的邮箱地址");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(authCalls()).toBe(0);
   });
 
   it("waits for the mailed link after registering", async () => {
@@ -291,7 +301,7 @@ describe("AuthPanel", () => {
     await flushPromises();
 
     expect(view.get("[data-test='email-error']").text()).toBe("请填写邮箱地址。");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(authCalls()).toBe(1);
   });
 
   it("returns to the login form from the pending view", async () => {
@@ -304,7 +314,92 @@ describe("AuthPanel", () => {
 
     expect(view.get("h2").text()).toBe("登录后使用加速服务");
     expect(view.find("input#auth-email").exists()).toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(authCalls()).toBe(1);
+  });
+
+  it("adopts the confirmation as soon as the visitor comes back", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(pendingBody("alice@example.com")));
+    const view = mount(AuthPanel);
+
+    await submit(view, "alice", "secret123");
+    expect(view.get("h2").text()).toBe("验证邮箱");
+
+    fetchMock.mockResolvedValue(jsonResponse(sessionBody()));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+
+    expect(lastCall()[0]).toBe("/api/auth/me");
+    expect(view.emitted("authenticated")).toHaveLength(1);
+  });
+
+  it("keeps waiting while the address is still unconfirmed", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(pendingBody("alice@example.com")));
+    const view = mount(AuthPanel);
+
+    await submit(view, "alice", "secret123");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+
+    expect(lastCall()[0]).toBe("/api/auth/me");
+    expect(view.emitted("authenticated")).toBeUndefined();
+    expect(view.get("h2").text()).toBe("验证邮箱");
+  });
+
+  it("survives a probe that fails while the visitor is away", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(pendingBody("alice@example.com")));
+    const view = mount(AuthPanel);
+
+    await submit(view, "alice", "secret123");
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+
+    expect(view.get("h2").text()).toBe("验证邮箱");
+    expect(view.get("[data-test='form-error']").text()).toBe("");
+  });
+
+  it("stops listening once the visitor returns to the form", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(pendingBody("alice@example.com")));
+    const view = mount(AuthPanel);
+
+    await submit(view, "alice", "secret123");
+    await view.get("button[type='button']").trigger("click");
+    await flushPromises();
+    const calls = fetchMock.mock.calls.length;
+
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+    expect(view.emitted("authenticated")).toBeUndefined();
+  });
+
+  it("also notices the confirmation when the window regains focus", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(pendingBody("alice@example.com")));
+    const view = mount(AuthPanel);
+
+    await submit(view, "alice", "secret123");
+    fetchMock.mockResolvedValue(jsonResponse(sessionBody()));
+    window.dispatchEvent(new Event("focus"));
+    await flushPromises();
+
+    expect(lastCall()[0]).toBe("/api/auth/me");
+    expect(view.emitted("authenticated")).toHaveLength(1);
+  });
+
+  it("shares one probe between events that arrive together", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(pendingBody("alice@example.com")));
+    const view = mount(AuthPanel);
+
+    await submit(view, "alice", "secret123");
+    fetchMock.mockResolvedValue(jsonResponse(sessionBody()));
+    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+
+    // The registration plus a single probe, not one probe per event.
+    expect(authCalls()).toBe(2);
+    expect(view.emitted("authenticated")).toHaveLength(1);
   });
 
   it("reports wrong credentials at form level", async () => {
@@ -340,8 +435,24 @@ describe("AuthPanel", () => {
     await view.get("form").trigger("submit");
     await flushPromises();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(authCalls()).toBe(1);
     expect(view.get("button[type='submit']").text()).toBe("正在登录");
     expect(view.get("button[type='submit']").attributes("disabled")).toBeDefined();
+  });
+
+  it("offers the blog sign-in when SSO is configured", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ blog: true }));
+    const view = mount(AuthPanel);
+    await flushPromises();
+
+    expect(view.get("a.auth__sso-button").attributes("href")).toBe("/api/sso/start");
+  });
+
+  it("hides the blog sign-in when SSO is not configured", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ blog: false }));
+    const view = mount(AuthPanel);
+    await flushPromises();
+
+    expect(view.find("a.auth__sso-button").exists()).toBe(false);
   });
 });

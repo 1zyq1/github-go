@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Secure GitHub release and raw-file download accelerator"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "aiomysql>=0.3.2,<0.4",
     "anyio>=4.10,<5",
     "fastapi>=0.135,<1",
     "httpx2[http2,brotli,zstd]>=2.13.1,<3",

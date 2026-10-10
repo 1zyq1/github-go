@@ -5,6 +5,7 @@ from collections.abc import Callable
 import anyio
 import httpx2
 import pytest
+from app.accounts import AccountStore
 from app.errors import ErrorEnvelope
 from app.main import create_app
 from app.schemas import ResolveResponse
@@ -18,6 +19,7 @@ _SOURCE_URL = "https://raw.githubusercontent.com/acme/widgets/main/file.bin"
 
 
 async def _clients(
+    account_store: AccountStore,
     handler: Callable[[httpx2.Request], httpx2.Response],
     *,
     capacity: int = 4,
@@ -28,7 +30,12 @@ async def _clients(
         trust_env=False,
     )
     limiter = anyio.CapacityLimiter(capacity)
-    app = create_app(upstream_client=upstream, capacity_limiter=limiter, mailer=RecordingMailer())
+    app = create_app(
+        upstream_client=upstream,
+        capacity_limiter=limiter,
+        mailer=RecordingMailer(),
+        account_store=account_store,
+    )
     api = httpx2.AsyncClient(
         transport=httpx2.ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://test",
@@ -47,7 +54,7 @@ async def _resolve_path(api: httpx2.AsyncClient) -> str:
     return TypeAdapter(ResolveResponse).validate_json(response.content).proxy_url
 
 
-async def test_get_streams_resolved_file_and_forwards_range() -> None:
+async def test_get_streams_resolved_file_and_forwards_range(account_store: AccountStore) -> None:
     requests: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -62,7 +69,7 @@ async def test_get_streams_resolved_file_and_forwards_range() -> None:
             content=b"pay",
         )
 
-    upstream, api = await _clients(handler)
+    upstream, api = await _clients(account_store, handler)
     try:
         proxy_path = await _resolve_path(api)
         response = await api.get(proxy_path, headers={"Range": "bytes=0-2"})
@@ -76,7 +83,7 @@ async def test_get_streams_resolved_file_and_forwards_range() -> None:
         await upstream.aclose()
 
 
-async def test_head_returns_bodyless_file_metadata() -> None:
+async def test_head_returns_bodyless_file_metadata(account_store: AccountStore) -> None:
     def handler(_request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(
             200,
@@ -84,7 +91,7 @@ async def test_head_returns_bodyless_file_metadata() -> None:
             content=b"hello world",
         )
 
-    upstream, api = await _clients(handler)
+    upstream, api = await _clients(account_store, handler)
     try:
         response = await api.head(await _resolve_path(api))
 
@@ -98,7 +105,9 @@ async def test_head_returns_bodyless_file_metadata() -> None:
         await upstream.aclose()
 
 
-async def test_maps_not_found_and_upstream_failure_without_leaking_body() -> None:
+async def test_maps_not_found_and_upstream_failure_without_leaking_body(
+    account_store: AccountStore,
+) -> None:
     for upstream_status, expected_status, expected_code in (
         (404, 404, "upstream_not_found"),
         (500, 502, "upstream_unavailable"),
@@ -111,7 +120,7 @@ async def test_maps_not_found_and_upstream_failure_without_leaking_body() -> Non
                 content=b"<html>secret</html>",
             )
 
-        upstream, api = await _clients(handler)
+        upstream, api = await _clients(account_store, handler)
         try:
             response = await api.get(await _resolve_path(api))
 
@@ -124,7 +133,7 @@ async def test_maps_not_found_and_upstream_failure_without_leaking_body() -> Non
             await upstream.aclose()
 
 
-async def test_preserves_bodyless_304_and_range_error() -> None:
+async def test_preserves_bodyless_304_and_range_error(account_store: AccountStore) -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         if request.headers.get("range"):
             return httpx2.Response(
@@ -134,7 +143,7 @@ async def test_preserves_bodyless_304_and_range_error() -> None:
             )
         return httpx2.Response(304, headers={"etag": '"v1"', "content-length": "11"})
 
-    upstream, api = await _clients(handler)
+    upstream, api = await _clients(account_store, handler)
     try:
         proxy_path = await _resolve_path(api)
         not_modified = await api.get(proxy_path, headers={"If-None-Match": '"v1"'})
@@ -152,12 +161,12 @@ async def test_preserves_bodyless_304_and_range_error() -> None:
         await upstream.aclose()
 
 
-async def test_rejects_invalid_proxy_token_and_health_is_local() -> None:
+async def test_rejects_invalid_proxy_token_and_health_is_local(account_store: AccountStore) -> None:
     def handler(_request: httpx2.Request) -> httpx2.Response:
         message = "health and invalid-token requests must not reach upstream"
         raise AssertionError(message)
 
-    upstream, api = await _clients(handler)
+    upstream, api = await _clients(account_store, handler)
     try:
         invalid = await api.get("/proxy/not-a-valid-token")
         health = await api.get("/api/health")

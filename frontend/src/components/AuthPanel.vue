@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import {
   AuthError,
   type AuthMode,
   type CredentialProblem,
   credentialProblem,
   emailProblem,
+  fetchSession,
+  fetchSsoProviders,
   login,
   register,
   requestVerification,
@@ -31,6 +33,8 @@ const notice = ref("");
 const awaiting = ref(false);
 /** The address the last verification mail went to. */
 const pendingEmail = ref("");
+/** Whether the blog cross-site sign-in is configured, so its button may show. */
+const ssoAvailable = ref<boolean | null>(null);
 const usernameInput = ref<HTMLInputElement | null>(null);
 const passwordInput = ref<HTMLInputElement | null>(null);
 const emailInput = ref<HTMLInputElement | null>(null);
@@ -44,7 +48,7 @@ const submitLabel = computed(() => {
 
 const pendingHint = computed(() =>
   pendingEmail.value.length > 0
-    ? `验证链接已发送到 ${pendingEmail.value}。请打开邮件完成验证，然后返回本站登录。`
+    ? `验证链接已发送到 ${pendingEmail.value}。请打开邮件完成验证，验证后本页会自动更新。`
     : "该账号还没有邮箱地址，无法发送验证链接。请填写地址后重新发送。",
 );
 
@@ -98,12 +102,70 @@ function reportFailure(error: unknown): void {
   formError.value = error.message;
 }
 
+/** Whether the pending view is listening for the confirmation. */
+let watching = false;
+/** Whether a probe is in flight, so overlapping events share one request. */
+let probing = false;
+
+/** Stop listening for the confirmation. */
+function stopWatching(): void {
+  if (!watching) {
+    return;
+  }
+  watching = false;
+  document.removeEventListener("visibilitychange", handleReturn);
+  window.removeEventListener("focus", handleReturn);
+}
+
+/**
+ * Ask whether the session exists yet.
+ *
+ * The mailed link is opened in whichever tab the mail client picks, and the
+ * cookie it sets belongs to the whole browser, so looking again when the
+ * visitor comes back is enough to notice the confirmation. A failed look is
+ * dropped rather than reported: the resend button and a reload remain.
+ */
+async function probeConfirmation(): Promise<void> {
+  if (probing) {
+    return;
+  }
+  probing = true;
+  try {
+    const session = await fetchSession().catch(() => null);
+    if (session?.authenticated) {
+      stopWatching();
+      emit("authenticated");
+    }
+  } finally {
+    probing = false;
+  }
+}
+
+/** Re-check on the two ways a visitor returns: the tab wakes, or the window does. */
+function handleReturn(): void {
+  if (!watching || document.visibilityState === "hidden") {
+    return;
+  }
+  void probeConfirmation();
+}
+
+/** Listen for the visitor coming back, which is when the cookie would be here. */
+function startWatching(): void {
+  if (watching) {
+    return;
+  }
+  watching = true;
+  document.addEventListener("visibilitychange", handleReturn);
+  window.addEventListener("focus", handleReturn);
+}
+
 /** The credentials were accepted, but access still waits on the mailed link. */
 function awaitConfirmation(address: string): void {
   email.value = address;
   pendingEmail.value = address;
   notice.value = PENDING_MESSAGE;
   awaiting.value = true;
+  startWatching();
   void nextTick(() => {
     emailInput.value?.focus();
   });
@@ -172,6 +234,7 @@ function backToForm(): void {
   if (submitting.value) {
     return;
   }
+  stopWatching();
   awaiting.value = false;
   notice.value = "";
   mode.value = "login";
@@ -180,6 +243,14 @@ function backToForm(): void {
     passwordInput.value?.focus();
   });
 }
+
+onMounted(() => {
+  void fetchSsoProviders().then((available) => {
+    ssoAvailable.value = available;
+  });
+});
+
+onUnmounted(stopWatching);
 </script>
 
 <template>
@@ -352,6 +423,14 @@ function backToForm(): void {
           {{ submitLabel }}
         </button>
       </form>
+
+      <div v-if="ssoAvailable" class="auth__sso">
+        <div class="auth__divider"><span>或</span></div>
+        <a class="button button--quiet auth__sso-button" href="/api/sso/start">
+          用博客账号登录
+        </a>
+        <p class="auth__sso-hint">第一次用会按邮箱自动绑定或建号。</p>
+      </div>
     </template>
   </section>
 </template>
@@ -446,5 +525,39 @@ function backToForm(): void {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
+}
+
+.auth__sso {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.auth__divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-leading);
+}
+
+.auth__divider::before,
+.auth__divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background-color: var(--border-hairline);
+}
+
+.auth__sso-button {
+  width: 100%;
+  min-height: var(--target-min);
+  justify-content: center;
+}
+
+.auth__sso-hint {
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-leading);
 }
 </style>

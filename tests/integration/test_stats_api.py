@@ -7,12 +7,13 @@ from pathlib import Path
 import anyio
 import httpx2
 import pytest
+from app.accounts import AccountStore, build_account_store
 from app.config import Settings
 from app.main import create_app
 from app.schemas import SessionResponse, StatsResponse
 from pydantic import TypeAdapter
 
-from tests.support import RecordingMailer, build_client, sign_in
+from tests.support import RecordingMailer, build_client, opened_store, sign_in
 
 pytestmark = pytest.mark.asyncio
 
@@ -57,21 +58,26 @@ async def _built_client(
 ) -> AsyncGenerator[tuple[httpx2.AsyncClient, httpx2.AsyncClient]]:
     """Open an anonymous and a signed-in client over one built application."""
     upstream_client = upstream.client()
-    app = create_app(
-        settings=Settings(
-            static_dir=_write_spa(tmp_path),
-            usage_limit=_LIMIT,
-            usage_window_seconds=3600,
-        ),
-        upstream_client=upstream_client,
-        capacity_limiter=anyio.CapacityLimiter(2),
-        mailer=RecordingMailer(),
+    settings = Settings(
+        static_dir=_write_spa(tmp_path),
+        usage_limit=_LIMIT,
+        usage_window_seconds=3600,
     )
-    try:
-        async with build_client(app) as anon, build_client(app) as member:
-            yield anon, await sign_in(member)
-    finally:
-        await upstream_client.aclose()
+    # This helper asserts on its own allowance, so its store has to come from
+    # these settings rather than from the shared, effectively unlimited one.
+    async with opened_store(build_account_store(settings)) as store:
+        app = create_app(
+            settings=settings,
+            upstream_client=upstream_client,
+            capacity_limiter=anyio.CapacityLimiter(2),
+            mailer=RecordingMailer(),
+            account_store=store,
+        )
+        try:
+            async with build_client(app) as anon, build_client(app) as member:
+                yield anon, await sign_in(member)
+        finally:
+            await upstream_client.aclose()
 
 
 def _stats(response: httpx2.Response) -> StatsResponse:
@@ -141,8 +147,13 @@ async def test_the_data_page_serves_the_shell_to_anyone(tmp_path: Path) -> None:
     assert page.headers["cache-control"] == "no-cache"
 
 
-async def test_the_api_only_mode_keeps_the_report_behind_the_gate(tmp_path: Path) -> None:
-    app = create_app(settings=Settings(static_dir=tmp_path / "absent"))
+async def test_the_api_only_mode_keeps_the_report_behind_the_gate(
+    tmp_path: Path, account_store: AccountStore
+) -> None:
+    app = create_app(
+        settings=Settings(static_dir=tmp_path / "absent"),
+        account_store=account_store,
+    )
 
     async with build_client(app) as anon:
         response = await anon.get("/api/stats")

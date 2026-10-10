@@ -9,10 +9,64 @@
       content="粘贴 GitHub 文件地址，安全解析为同源下载链接，保留 Range 与流式传输，不记录地址。"
     />
     <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#f5f6f8" />
+    <!--
+      Canonical origin. It has to match PUBLIC_BASE_URL, because search engines
+      and social previews read it as the address of this deployment; a mismatch
+      points them at a host that does not serve the shell.
+    -->
+    <link rel="canonical" href="https://github.1zyq1.com/" />
+    <meta name="robots" content="index, follow" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:site_name" content="GitHub 文件加速" />
+    <meta property="og:url" content="https://github.1zyq1.com/" />
+    <meta property="og:title" content="GitHub 文件加速 · 安全下载" />
+    <meta
+      property="og:description"
+      content="把 Release、归档与 raw 链接解析为同源下载地址，保留 Range 与流式传输，不记录地址。"
+    />
+    <meta property="og:image" content="https://github.1zyq1.com/og.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="GitHub 文件加速" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="GitHub 文件加速 · 安全下载" />
+    <meta
+      name="twitter:description"
+      content="把 Release、归档与 raw 链接解析为同源下载地址，保留 Range 与流式传输，不记录地址。"
+    />
+    <meta name="twitter:image" content="https://github.1zyq1.com/og.png" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "GitHub 文件加速",
+        "url": "https://github.1zyq1.com/",
+        "description": "把 GitHub 的 Release、归档与 raw 链接解析为同源地址，保留 Range 与流式传输，不记录提交的地址。",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Any",
+        "inLanguage": "zh-CN",
+        "isAccessibleForFree": true
+      }
+    </script>
+    <script
+      defer
+      src="https://cloud.umami.is/script.js"
+      data-website-id="b3d7552d-b639-4c71-84bc-c235227063a8"
+    ></script>
   </head>
   <body>
     <div id="app"></div>
+    <noscript>
+      <h1>GitHub 文件加速</h1>
+      <p>
+        把 GitHub 的 Release、归档与 raw 链接解析为同源下载地址，保留 Range 与流式传输；
+        GitHub 页面也会镜像到本站地址。需要启用 JavaScript 才能使用该服务。
+      </p>
+    </noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
