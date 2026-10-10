@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { Quota } from "../api/client";
+import { BLOG_URL, type Quota } from "../api/client";
 import NetworkMark from "./NetworkMark.vue";
 
 const props = defineProps<{
@@ -68,6 +68,14 @@ function requestLogout(): void {
           href="/stats"
         >
           数据
+        </a>
+        <a
+          class="app-header__link"
+          :href="BLOG_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          博客
         </a>
       </nav>
 

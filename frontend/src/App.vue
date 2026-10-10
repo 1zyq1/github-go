@@ -1,8 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { AuthError, logout as endSession, fetchSession, type Session } from "./api/client";
+import {
+  AuthError,
+  BLOG_URL,
+  logout as endSession,
+  fetchSession,
+  type Session,
+} from "./api/client";
 import AppHeader from "./components/AppHeader.vue";
 import AuthPanel from "./components/AuthPanel.vue";
+import BlogPromo from "./components/BlogPromo.vue";
 import FeatureStrip from "./components/FeatureStrip.vue";
 import StatsPanel from "./components/StatsPanel.vue";
 import UrlConverter from "./components/UrlConverter.vue";
@@ -155,8 +162,12 @@ async function handleUnauthorized(): Promise<void> {
       </template>
     </main>
     <FeatureStrip v-if="page === 'accelerator'" />
+    <BlogPromo v-if="page === 'accelerator'" />
     <footer class="page__footer">
       <p>仅代理 GitHub 官方文件与页面，不记录用户提交的地址。</p>
+      <a class="page__footer-link" :href="BLOG_URL" target="_blank" rel="noopener noreferrer">
+        访问博客
+      </a>
     </footer>
   </div>
 </template>

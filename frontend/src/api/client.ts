@@ -25,6 +25,9 @@ const FALLBACK_ERROR_MESSAGE = "解析失败，请稍后重试。";
 const AUTH_FALLBACK_ERROR_MESSAGE = "操作失败，请稍后重试。";
 const INVALID_RESPONSE_MESSAGE = "服务返回了无法识别的结果。";
 
+/** The blog this accelerator cross-promotes, linked from the header, homepage, and footer. */
+export const BLOG_URL = "https://www.1zyq1.com";
+
 /** The hourly access allowance an account currently holds. */
 export interface Quota {
   readonly limit: number;

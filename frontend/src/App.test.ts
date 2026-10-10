@@ -280,7 +280,7 @@ describe("App on the data page", () => {
     const view = await renderApp();
 
     expect(view.get("h1").text()).toBe("GitHub 文件加速");
-    expect(view.findAll("nav a")).toHaveLength(2);
+    expect(view.findAll("nav a")).toHaveLength(3);
     expect(view.get("a[aria-current='page']").text()).toBe("数据");
   });
 
