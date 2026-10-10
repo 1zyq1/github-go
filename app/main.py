@@ -34,7 +34,6 @@ from app.accounts import (
     build_account_store,
 )
 from app.auth import (
-    LOGIN_REQUIRED_MESSAGE,
     SESSION_COOKIE_NAME,
     AuthMiddleware,
     GatePolicy,
@@ -48,10 +47,10 @@ from app.mailer import MailDeliveryError, Mailer, build_mailer, verification_lin
 from app.middleware import RequestSizeLimitMiddleware, SecurityHeadersMiddleware
 from app.proxy import ProxyService
 from app.schemas import (
+    GrantRequest,
     HealthResponse,
     LoginRequest,
     QuotaView,
-    RedeemBonusOut,
     RegisterRequest,
     ResolveRequest,
     ResolveResponse,
@@ -62,10 +61,10 @@ from app.schemas import (
 )
 from app.sso import (
     issue_assertion,
-    issue_spend_token,
     parse_assertion,
     sign_state,
     sso_username,
+    verify_grant_ticket,
     verify_state,
 )
 from app.upstream import build_upstream_client
@@ -593,46 +592,17 @@ def _sso_invalid_redirect() -> AppError:
     return AppError("invalid_redirect", "非法的回跳地址。", 400)
 
 
-_REDEEM_NO_EMAIL = "该账号没有邮箱。无法关联博客积分"
-_REDEEM_REJECTED = "兑换失败。博客未扣到积分"
+_GRANT_NO_USER = "找不到对应的加速站账号。请先用博客账号登录一次加速站"
 
 
-def _redeem_unauthorized() -> AppError:
-    return AppError("unauthorized", LOGIN_REQUIRED_MESSAGE, 401)
+def _grant_rejected(message: str) -> AppError:
+    return AppError("grant_rejected", message, 400)
 
 
-def _redeem_no_email() -> AppError:
-    return AppError("missing_email", _REDEEM_NO_EMAIL, 400)
-
-
-def _redeem_down(class_name: str) -> AppError:
-    return AppError("redeem_unavailable", f"连不上博客后端 {class_name}", 502)
-
-
-def _redeem_rejected(detail: str) -> AppError:
-    return AppError("redeem_rejected", detail, 400)
-
-
-def _blog_error_message(response: httpx2.Response) -> str | None:
-    """Pull the human message out of the blog's {"error": {...}} envelope."""
-    try:
-        body = cast("object", response.json())
-    except ValueError:
-        return None
-    if not isinstance(body, dict):
-        return None
-    error = cast("dict[str, object]", body).get("error")
-    if not isinstance(error, dict):
-        return None
-    message = cast("dict[str, object]", error).get("message")
-    return message if isinstance(message, str) else None
-
-
-def _register_sso_routes(  # noqa: C901, PLR0915
+def _register_sso_routes(  # noqa: C901
     application: FastAPI,
     store: AccountStore,
     settings: Settings,
-    blog_client: httpx2.AsyncClient | None = None,
 ) -> None:
     """Register the cross-site SSO endpoints shared with the blog."""
 
@@ -640,12 +610,7 @@ def _register_sso_routes(  # noqa: C901, PLR0915
     async def sso_providers() -> JSONResponse:
         """Tell the SPA which cross-site buttons to show (SSO sign-in and redeem)."""
         return JSONResponse(
-            {
-                "blog": settings.sso_enabled,
-                "redeem_enabled": settings.redeem_enabled,
-                "redeem_credits": settings.redeem_credits,
-                "redeem_attempts": settings.redeem_attempts,
-            }
+            {"blog": settings.sso_enabled, "redeem_enabled": settings.redeem_enabled}
         )
 
     @application.get("/api/sso/start", include_in_schema=False)
@@ -701,55 +666,29 @@ def _register_sso_routes(  # noqa: C901, PLR0915
         _set_session_cookie(response, settings, token)
         return response
 
-    @application.post("/api/redeem", include_in_schema=False)
-    async def redeem(request: Request) -> RedeemBonusOut:
-        """Spend blog credits server-to-server to add extra attempts to this account.
+    @application.post("/api/sso/grant", include_in_schema=False)
+    async def sso_grant(payload: GrantRequest) -> JSONResponse:
+        """Blog -> accelerator server-to-server: top up the bonus reserve.
 
-        The blog deducts first; only if that succeeds do we grant the bonus, so a
-        failed call never grants free attempts.
+        The blog deducts credits first, then signs this grant ticket; we verify
+        it and add the bonus to the account matched by email. Anonymous is fine:
+        the ticket (not a session) is the authentication.
         """
         if not settings.redeem_enabled:
             raise _sso_unavailable()
-        user = current_user(request)
+        email, attempts = verify_grant_ticket(settings, payload.ticket)
+        user = await store.find_by_email(email)
         if user is None:
-            raise _redeem_unauthorized()
-        email = (user.email or "").strip()
-        if not email:
-            raise _redeem_no_email()
-        ticket = issue_spend_token(settings, email, settings.redeem_credits)
-        spend_url = f"{settings.blog_api_base_url.rstrip('/')}/api/credits/accelerator-spend"
-        try:
-            if blog_client is not None:
-                response = await blog_client.post(spend_url, json={"token": ticket})
-            else:
-                async with httpx2.AsyncClient(timeout=15.0) as fresh:
-                    response = await fresh.post(spend_url, json={"token": ticket})
-        except httpx2.HTTPError as error:
-            raise _redeem_down(error.__class__.__name__) from error
-        if not response.is_success:
-            detail = _blog_error_message(response)
-            raise _redeem_rejected(detail or _REDEEM_REJECTED)
-
-        granted = await store.add_bonus(user.id, settings.redeem_attempts)
-        snap = await store.snapshot(user.id)
+            raise _grant_rejected(_GRANT_NO_USER)
+        granted = await store.add_bonus(user.id, attempts)
         logger.info(
-            "博客积分兑换成功。%s 扣 %d 积分。兑换 %d 次。剩余兑换额度 %d",
+            "博客授额票据生效。%s(%s) 加 %d 次。剩余兑换额度 %d",
             user.username,
-            settings.redeem_credits,
-            settings.redeem_attempts,
+            email,
+            attempts,
             granted,
         )
-        return RedeemBonusOut(
-            ok=True,
-            credits_spent=settings.redeem_credits,
-            attempts_granted=settings.redeem_attempts,
-            bonus=granted,
-            quota=QuotaView(
-                limit=snap.limit,
-                remaining=snap.remaining,
-                reset_after_seconds=snap.reset_after_seconds,
-            ),
-        )
+        return JSONResponse({"ok": True, "attempts_granted": attempts, "bonus": granted})
 
 
 def _register_stats_routes(application: FastAPI, store: AccountStore) -> None:
@@ -927,14 +866,13 @@ def _register_web_proxy(
         )
 
 
-def create_app(  # noqa: PLR0913, PLR0915
+def create_app(  # noqa: PLR0915
     settings: Settings | None = None,
     *,
     upstream_client: httpx2.AsyncClient | None = None,
     capacity_limiter: anyio.CapacityLimiter | None = None,
     mailer: Mailer | None = None,
     account_store: AccountStore | None = None,
-    blog_client: httpx2.AsyncClient | None = None,
 ) -> FastAPI:
     """Create an application instance with safe API and proxy routes."""
     app_settings = settings or Settings()
@@ -1003,7 +941,7 @@ def create_app(  # noqa: PLR0913, PLR0915
     _register_exception_handlers(application)
     _register_routes(application, current_proxy_service)
     _register_auth_routes(application, store, app_settings, mailer_service)
-    _register_sso_routes(application, store, app_settings, blog_client)
+    _register_sso_routes(application, store, app_settings)
     _register_stats_routes(application, store)
     _register_static_assets(application, app_settings)
     _register_web_proxy(application, current_web_page_proxy)

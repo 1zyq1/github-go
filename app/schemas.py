@@ -147,13 +147,9 @@ class StatsResponse(BaseModel):
     windows: list[StatsWindowView]
 
 
-class RedeemBonusOut(BaseModel):
-    """Result of redeeming blog credits for extra attempts."""
+class GrantRequest(BaseModel):
+    """Server-to-server ticket from the blog asking this service to add bonus."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    ok: bool
-    credits_spent: int
-    attempts_granted: int
-    bonus: int
-    quota: QuotaView
+    ticket: str = Field(min_length=16, max_length=4096)

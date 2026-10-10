@@ -144,65 +144,39 @@ describe("App", () => {
     expect(view.get("button[type='submit']").attributes("disabled")).toBeDefined();
   });
 
-  it("offers a blog-credit redeem when the allowance is spent and SSO is on", async () => {
+  it("links to the blog wallet to redeem when the allowance is spent", async () => {
     fetchMock.mockImplementation((path) => {
       if (path === "/api/auth/me") {
         return Promise.resolve(jsonResponse(sessionBody(0, 60)));
       }
       if (path === "/api/sso/providers") {
-        return Promise.resolve(
-          jsonResponse({
-            blog: true,
-            redeem_enabled: true,
-            redeem_credits: 10,
-            redeem_attempts: 10,
-          }),
-        );
+        return Promise.resolve(jsonResponse({ blog: true, redeem_enabled: true }));
       }
       return Promise.resolve(jsonResponse(anonymousBody()));
     });
     const view = await renderApp();
 
-    const panel = view.get("[data-test='redeem-panel']");
-    expect(panel.text()).toContain("10 积分");
-    expect(view.get("[data-test='redeem-button']").text()).toBe("用博客积分兑换");
+    expect(view.find("[data-test='redeem-panel']").exists()).toBe(true);
+    expect(view.get("[data-test='redeem-button']").attributes("href")).toBe(
+      "https://www.1zyq1.com/credits",
+    );
   });
 
-  it("redeems blog credits and restores the allowance", async () => {
+  it("confirms a redeem completed on the blog wallet", async () => {
+    window.history.replaceState({}, "", "/?redeem=ok");
     fetchMock.mockImplementation((path) => {
       if (path === "/api/auth/me") {
-        return Promise.resolve(jsonResponse(sessionBody(0, 60)));
+        // The blog granted the bonus before sending us back: not exhausted.
+        return Promise.resolve(jsonResponse(sessionBody(10, 60)));
       }
       if (path === "/api/sso/providers") {
-        return Promise.resolve(
-          jsonResponse({
-            blog: true,
-            redeem_enabled: true,
-            redeem_credits: 10,
-            redeem_attempts: 10,
-          }),
-        );
-      }
-      if (path === "/api/redeem") {
-        return Promise.resolve(
-          jsonResponse({
-            ok: true,
-            credits_spent: 10,
-            attempts_granted: 10,
-            bonus: 10,
-            quota: { limit: 10, remaining: 10, reset_after_seconds: 60 },
-          }),
-        );
+        return Promise.resolve(jsonResponse({ blog: true, redeem_enabled: true }));
       }
       return Promise.resolve(jsonResponse(anonymousBody()));
     });
     const view = await renderApp();
 
-    await view.get("[data-test='redeem-button']").trigger("click");
-    await flushPromises();
-
-    expect(view.get("[data-test='redeem-notice']").text()).toContain("已用 10 积分兑换 10 次");
-    // The fresh quota re-enables the converter without a reload.
+    expect(view.get("[data-test='redeem-notice']").text()).toContain("已在博客钱包完成兑换");
     expect(view.find("[data-test='redeem-panel']").exists()).toBe(false);
   });
 

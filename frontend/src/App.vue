@@ -3,10 +3,10 @@ import { computed, onMounted, ref } from "vue";
 import {
   AuthError,
   BLOG_URL,
+  BLOG_WALLET_URL,
   logout as endSession,
   fetchSession,
   fetchSsoProviders,
-  redeem as redeemAttempts,
   type Session,
   type SsoProviders,
 } from "./api/client";
@@ -50,18 +50,9 @@ const ssoError = ref("");
 /** A pending return to the SSO authorize URL after a local sign-in. */
 const ssoReturn = ref("");
 /** Which cross-site buttons the backend serves (SSO sign-in, redeem). */
-const providers = ref<SsoProviders>({
-  blog: false,
-  redeemEnabled: false,
-  redeemCredits: 0,
-  redeemAttempts: 0,
-});
-/** A redeem request is in flight. */
-const redeeming = ref(false);
-/** Redeem failure, shown when nothing was granted. */
-const redeemError = ref("");
-/** Redeem success summary. */
-const redeemNotice = ref("");
+const providers = ref<SsoProviders>({ blog: false, redeemEnabled: false });
+/** Redeemed on the blog wallet and returned here with success. */
+const redeemConfirmed = ref(false);
 
 const quotaExhausted = computed(() => {
   const quota = session.value?.quota ?? null;
@@ -110,6 +101,8 @@ onMounted((): void => {
   if (returnTo.startsWith("/") && !returnTo.startsWith("//")) {
     ssoReturn.value = returnTo;
   }
+  // Returned from the blog wallet after a successful redeem.
+  redeemConfirmed.value = parameters.get("redeem") === "ok";
   void fetchSsoProviders().then((next) => {
     providers.value = next;
   });
@@ -132,29 +125,6 @@ async function handleLogout(): Promise<void> {
 async function handleUnauthorized(): Promise<void> {
   await refreshSession();
   sessionError.value = SESSION_EXPIRED_MESSAGE;
-}
-
-async function handleRedeem(): Promise<void> {
-  if (redeeming.value) {
-    return;
-  }
-  redeeming.value = true;
-  redeemError.value = "";
-  redeemNotice.value = "";
-  try {
-    const result = await redeemAttempts();
-    // Reflect the fresh quota at once so the converter re-enables without a reload.
-    if (session.value !== null) {
-      session.value = { ...session.value, quota: result.quota };
-    }
-    redeemNotice.value =
-      `已用 ${result.creditsSpent} 积分兑换 ${result.attemptsGranted} 次，` +
-      `剩余兑换额度 ${result.bonus} 次。`;
-  } catch (error: unknown) {
-    redeemError.value = error instanceof AuthError ? error.message : "兑换失败，请稍后重试。";
-  } finally {
-    redeeming.value = false;
-  }
 }
 </script>
 
@@ -190,8 +160,8 @@ async function handleRedeem(): Promise<void> {
         >
           本小时的访问额度已用完，请在额度重置后再试。
         </p>
-        <p v-if="redeemNotice" class="redeem__notice" role="status" data-test="redeem-notice">
-          {{ redeemNotice }}
+        <p v-if="redeemConfirmed" class="redeem__notice" role="status" data-test="redeem-notice">
+          已在博客钱包完成兑换，额度已恢复。
         </p>
         <div
           v-if="quotaExhausted && sessionState === 'authenticated' && providers.redeemEnabled"
@@ -199,26 +169,15 @@ async function handleRedeem(): Promise<void> {
           data-test="redeem-panel"
         >
           <p class="redeem__lead">
-            额度用完了，可以用博客积分兑换额外次数（{{ providers.redeemCredits }} 积分 =
-            {{ providers.redeemAttempts }} 次）。
+            额度用完了，去博客钱包用博客积分兑换额外次数（那儿能看到余额和积分是怎么来的）。
           </p>
-          <p
-            v-if="redeemError"
-            class="notice notice--warning"
-            role="alert"
-            data-test="redeem-error"
-          >
-            {{ redeemError }}
-          </p>
-          <button
+          <a
             class="button button--primary redeem__button"
-            type="button"
-            :disabled="redeeming"
+            :href="BLOG_WALLET_URL"
             data-test="redeem-button"
-            @click="handleRedeem"
           >
-            {{ redeeming ? "兑换中…" : "用博客积分兑换" }}
-          </button>
+            去博客钱包兑换
+          </a>
         </div>
         <p v-if="sessionState === 'loading'" class="page__status" role="status">
           正在检查登录状态。

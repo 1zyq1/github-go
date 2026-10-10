@@ -1,8 +1,6 @@
 """Unit tests for the cross-site SSO token signing and verification."""
 
-import base64
-import json
-from typing import cast
+import time
 
 import pytest
 from app.accounts import User
@@ -10,11 +8,12 @@ from app.config import Settings
 from app.sso import (
     SsoError,
     issue_assertion,
-    issue_spend_token,
     parse_assertion,
     sanitize_return_path,
+    sign_payload,
     sign_state,
     sso_username,
+    verify_grant_ticket,
     verify_state,
 )
 
@@ -176,17 +175,44 @@ def test_sso_username(raw: str, expected: str) -> None:
     assert sso_username(raw) == expected
 
 
-def test_issue_spend_token_carries_the_deduction_claims() -> None:
-    token = issue_spend_token(_settings(), "alice@example.com", 10)
-
-    raw, _, signature = token.partition(".")
-    assert signature
-    payload = cast(
-        "dict[str, object]",
-        json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))),
+def test_verify_grant_ticket_reads_email_and_attempts() -> None:
+    settings = _settings()
+    now = int(time.time())
+    # A blog-signed grant ticket: iss=blog (its audience), aud=accelerator (its issuer).
+    ticket = sign_payload(
+        settings,
+        {
+            "iss": "blog",
+            "aud": "github-accelerator",
+            "action": "grant",
+            "email": "alice@example.com",
+            "attempts": 10,
+            "iat": now,
+            "exp": now + 300,
+        },
     )
-    assert payload["iss"] == "github-accelerator"
-    assert payload["aud"] == "blog"
-    assert payload["action"] == "spend"
-    assert payload["email"] == "alice@example.com"
-    assert payload["credits"] == 10
+
+    email, attempts = verify_grant_ticket(settings, ticket)
+
+    assert email == "alice@example.com"
+    assert attempts == 10
+
+
+def test_verify_grant_ticket_rejects_a_non_grant_action() -> None:
+    settings = _settings()
+    now = int(time.time())
+    spend = sign_payload(
+        settings,
+        {
+            "iss": "blog",
+            "aud": "github-accelerator",
+            "action": "spend",
+            "email": "alice@example.com",
+            "attempts": 10,
+            "iat": now,
+            "exp": now + 300,
+        },
+    )
+
+    with pytest.raises(SsoError):
+        _ = verify_grant_ticket(settings, spend)

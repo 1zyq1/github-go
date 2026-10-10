@@ -91,12 +91,12 @@ GET /api/sso/callback       -> 验签断言 → 建号/登录 → 302 回 /?sso=
 
 ## 用博客积分兑换次数
 
-额度用尽时，登录用户可以**用博客积分兑换额外次数**（默认 10 积分 → 10 次，可配）。加速站后端拿共享密钥签一张 `action=spend` 票据，**服务端到端**打到博客后端扣积分；扣成功才把次数加到本账号的「兑换额度」（`users.bonus_units`）。窗口额度用满后自动优先消耗兑换额度，因此可以超出每小时窗口上限。按邮箱认人（即 SSO 建立的绑定关系）—— 余额不足或没绑定博客账号会明确报错。
+额度用尽时，登录用户被引导去**博客钱包**（`{BLOG}/credits`）完成兑换——新用户在那儿能看到余额和积分是什么，再决定换。**编排在博客侧**：博客钱包先扣积分（不足立刻报错），再服务端到端拿一张 `action=grant` 票据打到本站加次数；本站验签后把次数加到该账号的「兑换额度」（`users.bonus_units`）。窗口额度用满后自动优先消耗兑换额度，因此可以超出每小时窗口上限。按邮箱认人（即 SSO 建立的绑定关系）。
 
-- 端点：`POST /api/redeem`（需登录，不消耗额度）。返回 `credits_spent` / `attempts_granted` / `bonus` / 更新后的 `quota`。
+- 本站端点：`POST /api/sso/grant`（**服务端到端、无需会话**，共享密钥验票据）。博客扣完分调它加次数，失败则博客退回积分。
 - 额度逻辑：`consume` 先扣滑动窗口，窗口满则扣 `bonus_units`；失败访问会把用掉的那一单位（窗口或兑换）退回。`snapshot` 的 `remaining` = 窗口剩余 + 兑换额度。
-- 配置见 `.env.example` 的 `GITHUB_ACCELERATOR_REDEEM_*` 与 `GITHUB_ACCELERATOR_BLOG_API_BASE_URL`。
-- 博客侧：`POST /api/credits/accelerator-spend`（服务端到端，共享密钥验票据），需在博客后端配好 `SSO_SHARED_SECRET`。
+- 前端：额度用尽时显示「去博客钱包兑换」链接；兑换成功后博客跳回本站 `/?redeem=ok`，提示额度已恢复。
+- 配置：仅需 SSO 共享密钥（`GITHUB_ACCELERATOR_SSO_SHARED_SECRET`）。**价格（多少积分换多少次）配在博客侧**（`ACCELERATOR_REDEEM_*`）。
 
 ## 数据页
 

@@ -94,13 +94,6 @@ class Settings(BaseSettings):
     sso_self_callback_url: str = ""
     sso_assertion_ttl_seconds: Annotated[int, Field(ge=30, le=3600)] = 300
 
-    # Blog-credit redemption: when the hourly allowance runs out, a visitor can
-    # spend blog credits to get extra attempts. The accelerator calls the blog's
-    # backend server-to-server at this base URL (shared secret = the SSO one).
-    blog_api_base_url: str = "https://api.blog.1zyq1.com"
-    redeem_credits: Annotated[int, Field(ge=1, le=100_000)] = 10
-    redeem_attempts: Annotated[int, Field(ge=1, le=100_000)] = 10
-
     @property
     def sso_enabled(self) -> bool:
         """Whether cross-site SSO is configured."""
@@ -108,8 +101,12 @@ class Settings(BaseSettings):
 
     @property
     def redeem_enabled(self) -> bool:
-        """Whether blog-credit redemption is available (SSO + a blog base URL)."""
-        return self.sso_enabled and bool(self.blog_api_base_url.strip())
+        """Whether the blog-wallet redeem flow can hand out bonus units.
+
+        The price lives on the blog (it deducts first); this service only needs
+        the shared secret to verify the grant ticket the blog signs.
+        """
+        return self.sso_enabled
 
     @model_validator(mode="after")
     def validate_connection_pool(self) -> Self:

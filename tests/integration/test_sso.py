@@ -1,5 +1,6 @@
 """Integration tests for the cross-site SSO endpoints shared with the blog."""
 
+import time
 from collections.abc import AsyncGenerator
 
 import httpx2
@@ -10,8 +11,7 @@ from app.auth import SESSION_COOKIE_NAME
 from app.config import Settings
 from app.errors import ErrorEnvelope
 from app.main import create_app
-from app.schemas import RedeemBonusOut
-from app.sso import issue_assertion, sign_state
+from app.sso import issue_assertion, sign_payload, sign_state
 from fastapi import FastAPI
 from pydantic import TypeAdapter
 
@@ -77,8 +77,6 @@ async def test_providers_reports_sss_enabled_when_configured(sso_app: FastAPI) -
     assert response.status_code == 200
     assert response.json()["blog"] is True
     assert response.json()["redeem_enabled"] is True
-    assert response.json()["redeem_credits"] == 10
-    assert response.json()["redeem_attempts"] == 10
 
 
 async def test_start_redirects_to_the_blog_authorize(sso_app: FastAPI) -> None:
@@ -225,50 +223,43 @@ async def test_callback_rejects_a_forged_state(sso_app: FastAPI) -> None:
     assert SESSION_COOKIE_NAME not in client.cookies
 
 
-async def test_redeem_is_unavailable_when_sso_is_disabled(
+async def test_grant_tops_up_the_bonus_from_a_blog_ticket(
+    sso_app: FastAPI, account_store: AccountStore
+) -> None:
+    async with build_client(sso_app) as client:
+        _ = await sign_in(client, username="grant-member")
+        user = await account_store.find_by_email("grant-member@example.com")
+        assert user is not None
+        before = (await account_store.snapshot(user.id)).remaining
+
+        now = int(time.time())
+        ticket = sign_payload(
+            _settings(),
+            {
+                "iss": "blog",
+                "aud": "github-accelerator",
+                "action": "grant",
+                "email": "grant-member@example.com",
+                "attempts": 10,
+                "iat": now,
+                "exp": now + 300,
+            },
+        )
+        response = await client.post("/api/sso/grant", json={"ticket": ticket})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["attempts_granted"] == 10
+    assert response.json()["bonus"] == 10
+    assert (await account_store.snapshot(user.id)).remaining == before + 10
+
+
+async def test_grant_is_unavailable_when_sso_is_disabled(
     client: httpx2.AsyncClient,
 ) -> None:
-    response = await client.post("/api/redeem")
+    response = await client.post("/api/sso/grant", json={"ticket": "x" * 20})
 
     assert response.status_code == 503
     assert TypeAdapter(ErrorEnvelope).validate_json(response.content)["error"]["code"] == (
         "sso_unavailable"
     )
-
-
-async def test_redeem_requires_sign_in(anon_client: httpx2.AsyncClient) -> None:
-    # The gate challenges an anonymous JSON caller before the handler runs.
-    response = await anon_client.post("/api/redeem")
-
-    assert response.status_code == 401
-    assert TypeAdapter(ErrorEnvelope).validate_json(response.content)["error"]["code"] == (
-        "unauthorized"
-    )
-
-
-async def test_redeem_grants_bonus_after_the_blog_deducts(
-    account_store: AccountStore,
-) -> None:
-    def _blog_ok(_request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(200, json={"ok": True, "credits_spent": 10, "credits_balance": 90})
-
-    blog_client = httpx2.AsyncClient(transport=httpx2.MockTransport(_blog_ok))
-    app = create_app(
-        settings=_settings(),
-        mailer=RecordingMailer(),
-        account_store=account_store,
-        blog_client=blog_client,
-    )
-    try:
-        async with build_client(app) as client:
-            _ = await sign_in(client, username="redeem-member")
-            response = await client.post("/api/redeem")
-    finally:
-        await blog_client.aclose()
-
-    assert response.status_code == 200
-    result = TypeAdapter(RedeemBonusOut).validate_json(response.content)
-    assert result.ok is True
-    assert result.credits_spent == 10
-    assert result.attempts_granted == 10
-    assert result.bonus == 10

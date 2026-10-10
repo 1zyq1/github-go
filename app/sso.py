@@ -51,6 +51,8 @@ _EXPIRED_ASSERTION = "登录票据已过期。请重新点击登录"
 _MISSING_EMAIL = "登录票据缺少邮箱。请重新点击登录"
 _INVALID_STATE = "登录校验失败。请重新点击登录"
 _EXPIRED_STATE = "登录已超时。请重新点击登录"
+_WRONG_ACTION = "兑换票据用途不对。请重新操作"
+_INVALID_AMOUNT = "兑换票据次数无效。请重新操作"
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +89,8 @@ def _signature(settings: Settings, raw: str) -> str:
     return hmac.new(key, raw.encode("ascii"), hashlib.sha256).hexdigest()
 
 
-def _sign(settings: Settings, payload: dict[str, object]) -> str:
+def sign_payload(settings: Settings, payload: dict[str, object]) -> str:
+    """Sign a payload with the shared secret as ``base64url(JSON).HMAC``."""
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     raw = _b64encode(body)
     return f"{raw}.{_signature(settings, raw)}"
@@ -142,7 +145,7 @@ def issue_assertion(settings: Settings, user: User) -> str:
         "exp": now + settings.sso_assertion_ttl_seconds,
         "jti": secrets.token_urlsafe(8),
     }
-    return _sign(settings, payload)
+    return sign_payload(settings, payload)
 
 
 def parse_assertion(settings: Settings, token: str) -> SsoIdentity:
@@ -177,25 +180,34 @@ def parse_assertion(settings: Settings, token: str) -> SsoIdentity:
     )
 
 
-def issue_spend_token(settings: Settings, email: str, amount: int) -> str:
-    """Sign a server-to-server ticket asking the blog to deduct credits.
+def verify_grant_ticket(settings: Settings, token: str) -> tuple[str, int]:
+    """Verify a signed grant ticket from the blog; return (email, attempts).
 
-    Sent by the redeem endpoint (accelerator -> blog backend) so the blog can
-    charge the user's credits without any browser cookie: the shared secret is
-    the same one used to sign login assertions.
+    The blog deducts credits first, then signs this ticket (``issue_grant_ticket``
+    on its side) so this service can top up the user's bonus reserve.
     """
+    try:
+        payload = _verify(settings, token)
+    except _InvalidTokenError as exc:
+        raise _assertion_error(_INVALID_ASSERTION) from exc
+
     now = int(time.time())
-    payload: dict[str, object] = {
-        "iss": settings.sso_issuer,
-        "aud": settings.sso_audience,
-        "action": "spend",
-        "email": email,
-        "credits": amount,
-        "iat": now,
-        "exp": now + settings.sso_assertion_ttl_seconds,
-        "jti": secrets.token_urlsafe(8),
-    }
-    return _sign(settings, payload)
+    if payload.get("iss") != settings.sso_audience:
+        raise _assertion_error(_UNKNOWN_ISSUER)
+    if payload.get("aud") != settings.sso_issuer:
+        raise _assertion_error(_WRONG_AUDIENCE)
+    if payload.get("action") != "grant":
+        raise _assertion_error(_WRONG_ACTION)
+    if _number(payload, "exp") <= now:
+        raise _assertion_error(_EXPIRED_ASSERTION)
+
+    email = _text(payload, "email").strip()
+    if not email:
+        raise _assertion_error(_MISSING_EMAIL)
+    attempts = _number(payload, "attempts")
+    if attempts <= 0:
+        raise _assertion_error(_INVALID_AMOUNT)
+    return email, attempts
 
 
 def sanitize_return_path(path: str) -> str:
@@ -217,7 +229,7 @@ def sign_state(settings: Settings, return_path: str) -> str:
         "ts": int(time.time()),
         "n": secrets.token_urlsafe(8),
     }
-    return _sign(settings, payload)
+    return sign_payload(settings, payload)
 
 
 def verify_state(settings: Settings, token: str) -> str:
