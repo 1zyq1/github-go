@@ -132,6 +132,11 @@ onMounted((): void => {
   font-weight: 600;
 }
 
+/* Numeric column headers sit above right-aligned figures, so they line up. */
+.stats__table thead th:not(:first-child) {
+  text-align: right;
+}
+
 .stats__table tbody th {
   font-weight: 600;
 }
