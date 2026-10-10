@@ -241,14 +241,20 @@ class AuthMiddleware:
                 status = cast("int", message["status"])
             await send(message)
 
+        async def refund() -> None:
+            """Return the reserved unit, whether it was a window slot or a bonus."""
+            if decision.usage_id is not None:
+                await self._store.refund(decision.usage_id)
+            elif decision.bonus_spent and decision.user_id is not None:
+                await self._store.refund_bonus(decision.user_id)
+
         try:
             await self.app(scope, receive, capture)
         except BaseException:
-            if decision.usage_id is not None:
-                await self._store.refund(decision.usage_id)
+            await refund()
             raise
-        if decision.usage_id is not None and status not in _COUNTED_STATUSES:
-            await self._store.refund(decision.usage_id)
+        if status not in _COUNTED_STATUSES:
+            await refund()
         return status
 
 

@@ -221,6 +221,71 @@ async def test_refund_returns_the_reserved_unit(store: AccountStore) -> None:
     assert (await store.snapshot(user.id)).remaining == _LIMIT
 
 
+async def test_bonus_units_extend_the_remaining_allowance(store: AccountStore) -> None:
+    user = await store.register("alice", _PASSWORD, _EMAIL)
+
+    granted = await store.add_bonus(user.id, 5)
+
+    assert granted == 5
+    assert (await store.snapshot(user.id)).remaining == _LIMIT + 5
+
+
+async def test_consume_falls_back_to_bonus_once_the_window_is_full(
+    store: AccountStore,
+) -> None:
+    user = await store.register("alice", _PASSWORD, _EMAIL)
+    for _ in range(_LIMIT):
+        _ = await store.consume(user.id)
+    assert not (await store.consume(user.id)).allowed
+
+    _ = await store.add_bonus(user.id, 2)
+
+    first = await store.consume(user.id)
+    assert first.allowed
+    assert first.bonus_spent
+    assert first.usage_id is None
+    assert first.user_id == user.id
+
+    second = await store.consume(user.id)
+    assert second.allowed
+    assert second.bonus_spent
+
+    assert not (await store.consume(user.id)).allowed
+
+
+async def test_refund_bonus_returns_the_reserve_after_a_failed_access(
+    store: AccountStore,
+) -> None:
+    user = await store.register("alice", _PASSWORD, _EMAIL)
+    for _ in range(_LIMIT):
+        _ = await store.consume(user.id)
+    _ = await store.add_bonus(user.id, 1)
+    assert (await store.snapshot(user.id)).remaining == 1
+
+    decision = await store.consume(user.id)
+    assert decision.allowed
+    assert decision.bonus_spent
+    assert (await store.snapshot(user.id)).remaining == 0
+
+    await store.refund_bonus(user.id)
+
+    assert (await store.snapshot(user.id)).remaining == 1
+
+
+async def test_bonus_is_spent_only_after_the_window_slot_is_unavailable(
+    store: AccountStore,
+) -> None:
+    user = await store.register("alice", _PASSWORD, _EMAIL)
+    _ = await store.add_bonus(user.id, 5)
+
+    # A window slot exists, so the first consume spends it, not the bonus.
+    decision = await store.consume(user.id)
+    assert decision.allowed
+    assert not decision.bonus_spent
+    assert decision.usage_id is not None
+    assert (await store.snapshot(user.id)).remaining == _LIMIT - 1 + 5
+
+
 async def test_reset_usage_clears_the_window_and_reports_unknown_names() -> None:
     async with opened_store(_store(_policy(limit=5))) as store:
         user = await store.register("reset-user", _PASSWORD, _EMAIL)

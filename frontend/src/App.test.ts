@@ -144,6 +144,68 @@ describe("App", () => {
     expect(view.get("button[type='submit']").attributes("disabled")).toBeDefined();
   });
 
+  it("offers a blog-credit redeem when the allowance is spent and SSO is on", async () => {
+    fetchMock.mockImplementation((path) => {
+      if (path === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(sessionBody(0, 60)));
+      }
+      if (path === "/api/sso/providers") {
+        return Promise.resolve(
+          jsonResponse({
+            blog: true,
+            redeem_enabled: true,
+            redeem_credits: 10,
+            redeem_attempts: 10,
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse(anonymousBody()));
+    });
+    const view = await renderApp();
+
+    const panel = view.get("[data-test='redeem-panel']");
+    expect(panel.text()).toContain("10 积分");
+    expect(view.get("[data-test='redeem-button']").text()).toBe("用博客积分兑换");
+  });
+
+  it("redeems blog credits and restores the allowance", async () => {
+    fetchMock.mockImplementation((path) => {
+      if (path === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(sessionBody(0, 60)));
+      }
+      if (path === "/api/sso/providers") {
+        return Promise.resolve(
+          jsonResponse({
+            blog: true,
+            redeem_enabled: true,
+            redeem_credits: 10,
+            redeem_attempts: 10,
+          }),
+        );
+      }
+      if (path === "/api/redeem") {
+        return Promise.resolve(
+          jsonResponse({
+            ok: true,
+            credits_spent: 10,
+            attempts_granted: 10,
+            bonus: 10,
+            quota: { limit: 10, remaining: 10, reset_after_seconds: 60 },
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse(anonymousBody()));
+    });
+    const view = await renderApp();
+
+    await view.get("[data-test='redeem-button']").trigger("click");
+    await flushPromises();
+
+    expect(view.get("[data-test='redeem-notice']").text()).toContain("已用 10 积分兑换 10 次");
+    // The fresh quota re-enables the converter without a reload.
+    expect(view.find("[data-test='redeem-panel']").exists()).toBe(false);
+  });
+
   it("explains a refused download even when the session cannot be re-read", async () => {
     window.history.replaceState({}, "", "/?limited=1");
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));

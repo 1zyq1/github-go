@@ -116,6 +116,10 @@ class QuotaDecision:
     remaining: int
     retry_after_seconds: int
     usage_id: int | None
+    # Which account this unit belongs to and whether it came from the redeemed
+    # bonus reserve (so a failed access can refund it back to that reserve).
+    user_id: int | None = None
+    bonus_spent: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +271,8 @@ class _Sql:
     """Every statement the store runs, rendered against one table prefix."""
 
     existing_tables: str
+    existing_users_columns: str
+    alter_add_bonus: str
     purge: tuple[str, ...]
     schema: tuple[str, ...]
     insert_user: str
@@ -276,6 +282,9 @@ class _Sql:
     user_by_name: str
     user_by_email: str
     lock_account: str
+    bonus_read: str
+    add_bonus_units: str
+    spend_bonus_unit: str
     bind_email: str
     mark_verified: str
     latest_verification: str
@@ -318,6 +327,11 @@ def _build_sql(prefix: str) -> _Sql:
             WHERE table_schema = DATABASE()
               AND table_name IN ({_TABLE_PLACEHOLDERS})
             """,
+        existing_users_columns="""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = DATABASE() AND table_name = %s
+            """,
+        alter_add_bonus=f"ALTER TABLE {users} ADD COLUMN bonus_units INT NOT NULL DEFAULT 0",
         purge=tuple(f"DELETE FROM {quoted(name)}" for name in _PURGE_ORDER),
         schema=(
             f"""
@@ -328,6 +342,7 @@ def _build_sql(prefix: str) -> _Sql:
                 password_hash VARCHAR(255) NOT NULL,
                 created_at DOUBLE NOT NULL,
                 email_verified_at DOUBLE NULL,
+                bonus_units INT NOT NULL DEFAULT 0,
                 PRIMARY KEY (id),
                 UNIQUE KEY {prefix}users_username (username),
                 UNIQUE KEY {prefix}users_email (email)
@@ -402,6 +417,11 @@ def _build_sql(prefix: str) -> _Sql:
             WHERE email = %s
             """,
         lock_account=f"SELECT id FROM {users} WHERE id = %s FOR UPDATE",
+        bonus_read=f"SELECT bonus_units FROM {users} WHERE id = %s",
+        add_bonus_units=f"UPDATE {users} SET bonus_units = bonus_units + %s WHERE id = %s",
+        spend_bonus_unit=(
+            f"UPDATE {users} SET bonus_units = bonus_units - 1 WHERE id = %s AND bonus_units > 0"
+        ),
         bind_email=f"UPDATE {users} SET email = %s, email_verified_at = NULL WHERE id = %s",
         mark_verified=f"UPDATE {users} SET email_verified_at = %s WHERE id = %s",
         latest_verification=f"""
@@ -536,6 +556,13 @@ class AccountStore:
                 if name in existing:
                     continue
                 _ = await cursor.execute(statement)
+            # A `users` table created before the redeemed-bonus reserve still needs
+            # the column; fresh installs already have it (CREATE TABLE sets DEFAULT 0).
+            users_table = f"{self._target.table_prefix}users"
+            _ = await cursor.execute(self._sql.existing_users_columns, (users_table,))
+            columns = {_as_str(column[0]) for column in await cursor.fetchall()}
+            if "bonus_units" not in columns:
+                _ = await cursor.execute(self._sql.alter_add_bonus)
 
     async def close(self) -> None:
         """Release the pool; safe to call when it was never opened."""
@@ -786,7 +813,7 @@ class AccountStore:
             _ = await cursor.execute(self._sql.delete_session, (digest,))
 
     async def consume(self, user_id: int) -> QuotaDecision:
-        """Spend one unit of quota, or report when the window is exhausted."""
+        """Spend one unit of quota: a window slot first, then a redeemed bonus unit."""
         now = time.time()
         async with self._transaction() as cursor:
             await self._lock_account(cursor, user_id)
@@ -797,26 +824,60 @@ class AccountStore:
                 message = "count query returned no row"
                 raise RuntimeError(message)
             spent = _as_int(row[0])
-            if spent >= self._limit:
+            if spent < self._limit:
+                _ = await cursor.execute(self._sql.insert_usage, (user_id, now))
+                usage_id = cursor.lastrowid
+                if usage_id is None:
+                    message = "usage insert did not return a row id"
+                    raise RuntimeError(message)
                 return QuotaDecision(
-                    allowed=False,
+                    allowed=True,
                     limit=self._limit,
-                    remaining=0,
-                    retry_after_seconds=self._retry_after(row[1], now),
-                    usage_id=None,
+                    remaining=self._limit - spent - 1,
+                    retry_after_seconds=0,
+                    usage_id=usage_id,
+                    user_id=user_id,
+                    bonus_spent=False,
                 )
-            _ = await cursor.execute(self._sql.insert_usage, (user_id, now))
-            usage_id = cursor.lastrowid
-        if usage_id is None:
-            message = "usage insert did not return a row id"
-            raise RuntimeError(message)
-        return QuotaDecision(
-            allowed=True,
-            limit=self._limit,
-            remaining=self._limit - spent - 1,
-            retry_after_seconds=0,
-            usage_id=usage_id,
-        )
+            # The window is full: fall back to a redeemed bonus unit, if any.
+            _ = await cursor.execute(self._sql.bonus_read, (user_id,))
+            bonus_row = await cursor.fetchone()
+            bonus = _as_int(bonus_row[0]) if bonus_row is not None else 0
+            if bonus > 0:
+                affected = await cursor.execute(self._sql.spend_bonus_unit, (user_id,))
+                if affected > 0:
+                    return QuotaDecision(
+                        allowed=True,
+                        limit=self._limit,
+                        remaining=bonus - 1,
+                        retry_after_seconds=0,
+                        usage_id=None,
+                        user_id=user_id,
+                        bonus_spent=True,
+                    )
+            return QuotaDecision(
+                allowed=False,
+                limit=self._limit,
+                remaining=0,
+                retry_after_seconds=self._retry_after(row[1], now),
+                usage_id=None,
+            )
+
+    async def add_bonus(self, user_id: int, units: int) -> int:
+        """Add redeemed bonus units to an account; return the new reserve.
+
+        Bonus units are spent only once the sliding window is full, so this is
+        how a blog-credit redemption becomes extra usable attempts.
+        """
+        async with self._transaction() as cursor:
+            _ = await cursor.execute(self._sql.add_bonus_units, (units, user_id))
+            _ = await cursor.execute(self._sql.bonus_read, (user_id,))
+            row = await cursor.fetchone()
+        return _as_int(row[0]) if row is not None else 0
+
+    async def refund_bonus(self, user_id: int) -> None:
+        """Return one bonus unit after a failed access, mirroring ``refund``."""
+        _ = await self.add_bonus(user_id, 1)
 
     async def refund(self, usage_id: int) -> None:
         """Give back a reserved unit, used when the access did not succeed."""
@@ -824,7 +885,7 @@ class AccountStore:
             _ = await cursor.execute(self._sql.delete_usage, (usage_id,))
 
     async def snapshot(self, user_id: int) -> QuotaSnapshot:
-        """Report current quota standing without spending anything."""
+        """Report current quota standing (window remaining + bonus) without spending."""
         now = time.time()
         async with self._reading() as cursor:
             _ = await cursor.execute(
@@ -832,12 +893,15 @@ class AccountStore:
                 (user_id, now - self._window),
             )
             row = await cursor.fetchone()
+            _ = await cursor.execute(self._sql.bonus_read, (user_id,))
+            bonus_row = await cursor.fetchone()
         if row is None:
             message = "count query returned no row"
             raise RuntimeError(message)
         spent = _as_int(row[0])
+        bonus = _as_int(bonus_row[0]) if bonus_row is not None else 0
         reset = 0 if spent < self._limit else self._retry_after(row[1], now)
-        return QuotaSnapshot(self._limit, max(0, self._limit - spent), reset)
+        return QuotaSnapshot(self._limit, max(0, self._limit - spent) + bonus, reset)
 
     def _retry_after(self, oldest: object, now: float) -> int:
         """Seconds until the oldest spent unit leaves the window."""

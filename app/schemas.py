@@ -145,3 +145,15 @@ class StatsResponse(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     windows: list[StatsWindowView]
+
+
+class RedeemBonusOut(BaseModel):
+    """Result of redeeming blog credits for extra attempts."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    ok: bool
+    credits_spent: int
+    attempts_granted: int
+    bonus: int
+    quota: QuotaView

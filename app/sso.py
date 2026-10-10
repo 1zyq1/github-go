@@ -177,6 +177,27 @@ def parse_assertion(settings: Settings, token: str) -> SsoIdentity:
     )
 
 
+def issue_spend_token(settings: Settings, email: str, amount: int) -> str:
+    """Sign a server-to-server ticket asking the blog to deduct credits.
+
+    Sent by the redeem endpoint (accelerator -> blog backend) so the blog can
+    charge the user's credits without any browser cookie: the shared secret is
+    the same one used to sign login assertions.
+    """
+    now = int(time.time())
+    payload: dict[str, object] = {
+        "iss": settings.sso_issuer,
+        "aud": settings.sso_audience,
+        "action": "spend",
+        "email": email,
+        "credits": amount,
+        "iat": now,
+        "exp": now + settings.sso_assertion_ttl_seconds,
+        "jti": secrets.token_urlsafe(8),
+    }
+    return _sign(settings, payload)
+
+
 def sanitize_return_path(path: str) -> str:
     """Allow only same-origin relative paths, otherwise fall back to the root."""
     value = (path or "").strip()

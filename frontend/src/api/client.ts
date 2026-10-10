@@ -429,26 +429,85 @@ export async function logout(): Promise<void> {
 }
 
 /**
- * Whether the blog cross-site single sign-on is configured.
- *
- * The backend returns ``{"blog": true}`` only when it shares a secret with the
- * blog, so the "用博客账号登录" button is hidden otherwise. A failure is reported
- * as unavailable rather than thrown: the panel simply omits the button.
+ * Whether the blog cross-site single sign-on is configured, and the blog-credit
+ * redeem price. The backend reports unavailable on failure rather than throwing:
+ * the panel simply omits the buttons.
  */
-export async function fetchSsoProviders(): Promise<boolean> {
+export interface SsoProviders {
+  readonly blog: boolean;
+  readonly redeemEnabled: boolean;
+  readonly redeemCredits: number;
+  readonly redeemAttempts: number;
+}
+
+const SSO_PROVIDERS_OFF: SsoProviders = {
+  blog: false,
+  redeemEnabled: false,
+  redeemCredits: 0,
+  redeemAttempts: 0,
+};
+
+export async function fetchSsoProviders(): Promise<SsoProviders> {
   try {
     const { response, payload } = await sendJson("/api/sso/providers", {
       method: "GET",
       mode: "same-origin",
       headers: { accept: "application/json" },
     });
-    if (!response.ok) {
-      return false;
+    if (!response.ok || !isRecord(payload)) {
+      return SSO_PROVIDERS_OFF;
     }
-    return isRecord(payload) && payload["blog"] === true;
+    return {
+      blog: payload["blog"] === true,
+      redeemEnabled: payload["redeem_enabled"] === true,
+      redeemCredits: typeof payload["redeem_credits"] === "number" ? payload["redeem_credits"] : 0,
+      redeemAttempts:
+        typeof payload["redeem_attempts"] === "number" ? payload["redeem_attempts"] : 0,
+    };
   } catch {
-    return false;
+    return SSO_PROVIDERS_OFF;
   }
+}
+
+/** Result of redeeming blog credits for extra accelerator attempts. */
+export interface RedeemResult {
+  readonly creditsSpent: number;
+  readonly attemptsGranted: number;
+  readonly bonus: number;
+  readonly quota: Quota;
+}
+
+/**
+ * Spend blog credits server-to-server to top up the bonus reserve.
+ *
+ * The backend deducts the blog balance first; a thrown {@link AuthError} means
+ * nothing was granted (insufficient credits, no linked blog account, etc.).
+ */
+export async function redeem(): Promise<RedeemResult> {
+  const { response, payload } = await sendJson("/api/redeem", {
+    method: "POST",
+    mode: "same-origin",
+    headers: { accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw authFailure(payload, response);
+  }
+  if (!isRecord(payload)) {
+    throw new AuthError("invalid_response", INVALID_RESPONSE_MESSAGE, response.status);
+  }
+  const quota = parseQuota(payload["quota"]);
+  const creditsSpent = payload["credits_spent"];
+  const attemptsGranted = payload["attempts_granted"];
+  const bonus = payload["bonus"];
+  if (
+    quota === null ||
+    typeof creditsSpent !== "number" ||
+    typeof attemptsGranted !== "number" ||
+    typeof bonus !== "number"
+  ) {
+    throw new AuthError("invalid_response", INVALID_RESPONSE_MESSAGE, response.status);
+  }
+  return { creditsSpent, attemptsGranted, bonus, quota };
 }
 
 /** The windows the server publishes, in the order it publishes them. */

@@ -2,14 +2,18 @@
 
 from collections.abc import AsyncGenerator
 
+import httpx2
 import pytest
 import pytest_asyncio
 from app.accounts import AccountStore, User
 from app.auth import SESSION_COOKIE_NAME
 from app.config import Settings
+from app.errors import ErrorEnvelope
 from app.main import create_app
+from app.schemas import RedeemBonusOut
 from app.sso import issue_assertion, sign_state
 from fastapi import FastAPI
+from pydantic import TypeAdapter
 
 from tests.support import RecordingMailer, build_client, sign_in
 
@@ -62,7 +66,8 @@ async def test_providers_reports_sss_disabled_by_default(app: FastAPI) -> None:
         response = await client.get("/api/sso/providers")
 
     assert response.status_code == 200
-    assert response.json() == {"blog": False}
+    assert response.json()["blog"] is False
+    assert response.json()["redeem_enabled"] is False
 
 
 async def test_providers_reports_sss_enabled_when_configured(sso_app: FastAPI) -> None:
@@ -70,7 +75,10 @@ async def test_providers_reports_sss_enabled_when_configured(sso_app: FastAPI) -
         response = await client.get("/api/sso/providers")
 
     assert response.status_code == 200
-    assert response.json() == {"blog": True}
+    assert response.json()["blog"] is True
+    assert response.json()["redeem_enabled"] is True
+    assert response.json()["redeem_credits"] == 10
+    assert response.json()["redeem_attempts"] == 10
 
 
 async def test_start_redirects_to_the_blog_authorize(sso_app: FastAPI) -> None:
@@ -215,3 +223,52 @@ async def test_callback_rejects_a_forged_state(sso_app: FastAPI) -> None:
     assert response.status_code == 303
     assert response.headers["location"].startswith("/?sso=error")
     assert SESSION_COOKIE_NAME not in client.cookies
+
+
+async def test_redeem_is_unavailable_when_sso_is_disabled(
+    client: httpx2.AsyncClient,
+) -> None:
+    response = await client.post("/api/redeem")
+
+    assert response.status_code == 503
+    assert TypeAdapter(ErrorEnvelope).validate_json(response.content)["error"]["code"] == (
+        "sso_unavailable"
+    )
+
+
+async def test_redeem_requires_sign_in(anon_client: httpx2.AsyncClient) -> None:
+    # The gate challenges an anonymous JSON caller before the handler runs.
+    response = await anon_client.post("/api/redeem")
+
+    assert response.status_code == 401
+    assert TypeAdapter(ErrorEnvelope).validate_json(response.content)["error"]["code"] == (
+        "unauthorized"
+    )
+
+
+async def test_redeem_grants_bonus_after_the_blog_deducts(
+    account_store: AccountStore,
+) -> None:
+    def _blog_ok(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json={"ok": True, "credits_spent": 10, "credits_balance": 90})
+
+    blog_client = httpx2.AsyncClient(transport=httpx2.MockTransport(_blog_ok))
+    app = create_app(
+        settings=_settings(),
+        mailer=RecordingMailer(),
+        account_store=account_store,
+        blog_client=blog_client,
+    )
+    try:
+        async with build_client(app) as client:
+            _ = await sign_in(client, username="redeem-member")
+            response = await client.post("/api/redeem")
+    finally:
+        await blog_client.aclose()
+
+    assert response.status_code == 200
+    result = TypeAdapter(RedeemBonusOut).validate_json(response.content)
+    assert result.ok is True
+    assert result.credits_spent == 10
+    assert result.attempts_granted == 10
+    assert result.bonus == 10

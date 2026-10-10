@@ -245,8 +245,8 @@ function backToForm(): void {
 }
 
 onMounted(() => {
-  void fetchSsoProviders().then((available) => {
-    ssoAvailable.value = available;
+  void fetchSsoProviders().then((providers) => {
+    ssoAvailable.value = providers.blog;
   });
 });
 
