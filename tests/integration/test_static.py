@@ -167,8 +167,8 @@ async def test_security_headers_are_present(
     assert "unsafe-eval" not in csp
     # The shell loads exactly one third-party script, so its origin is named
     # rather than opening script-src to a whole scheme.
-    assert "script-src 'self' https://cloud.umami.is" in csp
-    assert "connect-src 'self' https://cloud.umami.is https://gateway.umami.is" in csp
+    assert "script-src 'self' https://u.1zyq1.com" in csp
+    assert "connect-src 'self' https://u.1zyq1.com" in csp
 
 
 async def test_the_crawl_documents_are_public_and_self_describing(

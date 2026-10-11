@@ -103,9 +103,16 @@ const items: readonly FeatureItem[] = [
   border-top: var(--border-hairline);
 }
 
+/* Bordered icon tile, the same 2rem square the blog's status cards use. */
 .feature-strip__icon {
+  display: flex;
   flex-shrink: 0;
-  color: var(--accent);
+  align-items: center;
+  justify-content: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  border: var(--border-hairline);
+  color: var(--text-muted);
 }
 
 .feature-strip__text {
@@ -115,7 +122,7 @@ const items: readonly FeatureItem[] = [
 
 .feature-strip__title {
   font-size: var(--text-small-size);
-  font-weight: 650;
+  font-weight: 500;
   line-height: var(--text-small-leading);
 }
 

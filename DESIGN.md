@@ -2,74 +2,77 @@
 
 ## 1. Direction & Atmosphere
 
-This is a precise relay console, not a marketing page. The interface should feel engineered, quiet, and trustworthy: a user arrives with one GitHub URL and leaves with one verified download link. The signature is a single signal route, expressed once in the network mark and repeated as a thin accent rule that connects the form to the result. Everything else stays neutral and quiet.
+This is a precise relay console, not a marketing page. The interface should feel engineered, quiet, and trustworthy: a user arrives with one GitHub URL and leaves with one verified download link. The brand mark is GitHub's own octocat — drawn the way GitHub draws it, a disc with the cat knocked out of it — so the brand names the platform being accelerated instead of inventing a logo of its own. Everything else stays neutral and quiet.
 
-The page has exactly one primary conversion flow: paste URL, submit, receive a download action. There is no centered hero, no decorative dashboard, no glassmorphism, no gradient background, and no fabricated usage metric. The visual language is closer to a well-made network appliance than a SaaS landing page: hairline structure, deliberate spacing, real states, and no ornament that competes with the task.
+The page has exactly one primary conversion flow: paste URL, submit, receive a download action. There is no centered hero, no decorative dashboard, no gradient background, and no fabricated usage metric. The visual language is closer to a well-made network appliance than a SaaS landing page: hairline structure, deliberate spacing, real states, and no ornament that competes with the task.
 
-The product is Chinese-first, with concise English used only where it is a stable technical term. URLs, file kinds, and file names use the mono stack so structure is visible at a glance. The theme is light-only and declares `color-scheme: light`; there is no automatic or decorative dark mode.
+This site and the blog (1zyq1.com) are one product, so they share one visual language, taken from the blog's inner pages: a monochrome ladder (near-black on white, near-white on a near-black canvas), square corners everywhere, hairline separation instead of shadow, and a sticky translucent bar carrying the brand. Colour is reserved for state — success, caution, failure — and is never decorative.
+
+The product is Chinese-first, with concise English used only where it is a stable technical term. URLs, file kinds, and file names use the mono stack so structure is visible at a glance. Both themes ship: `prefers-color-scheme` decides the first paint, the reader can override it with the header toggle, and the choice is stored. There is no third theme and no auto-inversion filter — `dark` is a designed palette, not a filter over the light one.
 
 ## 2. Color Tokens
 
-There is one accent hue: a deep azure. Success, warning, and danger colors are semantic signals only and are never used decoratively. Pure black, purple gradients, neon glows, and translucent panels are prohibited.
+One neutral ladder carries the whole interface; the accent *is* the top of that ladder (near-black on light, near-white on dark), exactly as the blog's `bg-primary` button behaves. Success, warning, and danger colors are semantic signals only and are never used decoratively. Purple gradients, neon glows, and coloured panels are prohibited.
 
-| Role | Token | Value | Contrast target | Usage |
-|------|-------|-------|-----------------|-------|
-| Canvas | `--surface-canvas` | `#F5F6F8` | - | Page background |
-| Raised surface | `--surface-raised` | `#FFFFFF` | - | Form, result panel |
-| Sunken surface | `--surface-sunken` | `#EDEFF3` | - | Disabled controls, code chips |
-| Inverse surface | `--surface-inverse` | `#0D1117` | - | Short mono chips only |
-| Text primary | `--text-primary` | `#0D1117` | 17.50:1 on canvas | Headings, body, file name |
-| Text secondary | `--text-secondary` | `#3D4653` | 8.83:1 on canvas | Supporting copy |
-| Text muted | `--text-muted` | `#5B6472` | 5.53:1 on canvas | Hints, metadata |
-| Text on accent | `--text-on-accent` | `#FFFFFF` | 6.57:1 on accent | Primary button label |
-| Border default | `--border-default` | `#D5DAE1` | - | Inputs, dividers |
-| Border strong | `--border-strong` | `#A8B1BD` | - | Hover and high-contrast edges |
-| Accent | `--accent` | `#0B5FA5` | 6.57:1 with white | Primary action, links, focus |
-| Accent hover | `--accent-hover` | `#084C87` | 8.77:1 with white | Primary action hover |
-| Accent soft | `--accent-soft` | `#E8F0F9` | 5.72:1 with accent text | Selected or informational tint |
-| Accent ring | `--accent-ring` | `rgba(11, 95, 165, 0.32)` | - | Focus and validation halo |
-| Success | `--status-success` | `#15803D` | 5.02:1 with white | Successful resolution |
-| Success soft | `--status-success-soft` | `#ECFDF3` | - | Success background |
-| Warning | `--status-warning` | `#A16207` | 4.92:1 with white | Caution text |
-| Danger | `--status-danger` | `#B42318` | 6.57:1 with white | Errors and invalid input |
-| Danger soft | `--status-danger-soft` | `#FEF3F2` | - | Error background |
+| Role | Token | Light | Dark | Usage |
+|------|-------|-------|------|-------|
+| Canvas | `--surface-canvas` | `#FFFFFF` | `#030303` | Page background |
+| Raised surface | `--surface-raised` | `#FAFAFA` | `rgb(255 255 255 / 5%)` | Cards, panels |
+| Sunken surface | `--surface-sunken` | `#F5F5F5` | `rgb(255 255 255 / 8%)` | Code chips, disabled fills |
+| Skeleton bar | `--surface-skeleton` | `#E5E5E5` | `rgb(255 255 255 / 14%)` | Loading placeholders only |
+| Canvas, translucent | `--surface-canvas-blur` | `rgb(255 255 255 / 60%)` | `rgb(3 3 3 / 60%)` | The sticky header bar only |
+| Input surface | `--surface-input` | `#FFFFFF` | `rgb(0 0 0 / 40%)` | Text fields |
+| Hover surface | `--surface-hover` | `#F5F5F5` | `rgb(255 255 255 / 10%)` | Link and icon-button hover |
+| Text primary | `--text-primary` | `#0A0A0A` | `#FAFAFA` | Headings, body, file name |
+| Text secondary | `--text-secondary` | `#404040` | `#D4D4D4` | Supporting copy, quiet buttons |
+| Text muted | `--text-muted` | `#737373` | `#A3A3A3` | Hints, metadata |
+| Text on accent | `--text-on-accent` | `#FFFFFF` | `#0A0A0A` | Primary button label |
+| Border default | `--border-default` | `#E5E5E5` | `rgb(255 255 255 / 10%)` | Inputs, card edges, dividers |
+| Border strong | `--border-strong` | `#A3A3A3` | `rgb(255 255 255 / 25%)` | Hover edges |
+| Accent | `--accent` | `#171717` | `#EBEBEB` | Primary action, mark |
+| Accent hover | `--accent-hover` | `#404040` | `#BFBFBF` | Primary action hover |
+| Accent soft | `--accent-soft` | `#F5F5F5` | `rgb(255 255 255 / 10%)` | Selected and current tints |
+| Focus ring | `--ring` | `#171717` | `#EBEBEB` | Focus outline |
+| Success | `--status-success` | `#15803D` | `#4ADE80` | Successful resolution |
+| Success soft | `--status-success-soft` | `rgb(34 197 94 / 5%)` | same | Success background |
+| Warning | `--status-warning` | `#B45309` | `#FBBF24` | Caution text and borders |
+| Warning soft | `--status-warning-soft` | `rgb(245 158 11 / 5%)` | same | Caution background |
+| Danger | `--status-danger` | `#DC2626` | `#F87171` | Errors and invalid input |
+| Danger soft | `--status-danger-soft` | `rgb(239 68 68 / 5%)` | same | Error background |
 
 Rules:
 
-- Body text must meet WCAG AA at normal size; the documented minimum here is 4.5:1 and all text/background pairs above exceed it.
+- Every text/background pair must meet WCAG AA 4.5:1 in **both** themes; the dark column is checked separately, not assumed.
 - Interactive text and icons must meet 3:1 against adjacent colors in addition to the text contrast target.
 - Color never carries meaning alone. Errors, success, and focus also use text, shape, or an icon.
 - No raw color value may appear outside this table. Extend this table before introducing a new semantic role.
-- Focus uses `--accent` with `--accent-ring`; it is never removed as decoration.
+- Focus uses `--ring` with a 2px offset; it is never removed as decoration. Because the ring flips with the ladder, it stays visible on the accent button, which is near-black on light and near-white on dark.
+- State colours keep one hue in both themes and change only their lightness (green 700/400, amber 700/400, red 600/400), which is how the blog's alerts behave.
 
 ## 3. Typography
 
-Two self-hosted variable families are used. Plus Jakarta Sans handles Latin text and interface numerals. Noto Sans SC handles Chinese text. Both are bundled as same-origin `woff2` files under `frontend/public/fonts/` and declared in `frontend/src/styles/fonts.css`; no third-party font CDN is allowed.
+Three self-hosted variable families are used, the same three the blog renders with. Geist handles Latin text, Geist Mono handles addresses and identifiers, and Noto Sans SC carries Chinese — Geist has no CJK glyphs, so Chinese falls through to it. All are bundled as same-origin `woff2` files under `frontend/public/fonts/` and declared in `frontend/src/styles/fonts.css`, which is generated by `scripts/fetch_fonts.py`; no third-party font CDN is allowed.
 
 ```css
---font-sans: "Plus Jakarta Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI",
-  sans-serif;
---font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+--font-sans: "Geist", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+--font-mono: "Geist Mono", ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 ```
 
-| Level | Token | Size | Weight | Line height | Tracking | Usage |
-|-------|-------|------|--------|-------------|----------|-------|
-| Display | `--text-display` | `clamp(2rem, 1.5rem + 2vw, 2.75rem)` | 700 | 1.15 | -0.02em | Single page title |
-| Heading | `--text-heading` | 24px | 650 | 1.3 | -0.01em | Panel headings |
-| Subheading | `--text-subheading` | 20px | 600 | 1.4 | 0 | Result file name |
-| Lead | `--text-lead` | 18px | 400 | 1.55 | 0 | One-sentence explanation |
-| Body | `--text-body` | 16px | 400 | 1.625 | 0 | Default copy |
-| Small | `--text-small` | 14px | 400/500 | 1.55 | 0 | Hints, helper text, actions |
-| Caption | `--text-caption` | 12px | 500 | 1.5 | 0.02em | Non-critical metadata only |
-| Overline | `--text-overline` | 12px | 650 | 1.4 | 0.08em | Short section labels |
+| Level | Token | Size | Weight | Line height | Usage |
+|-------|-------|------|--------|-------------|-------|
+| Subheading | `--text-subheading` | 20px | 500 | 1.4 | Card titles |
+| Body | `--text-body` | 16px | 500/700 | 1.625 | Brand, default copy |
+| Small | `--text-small` | 14px | 400/500 | 1.55 | Hints, helper text, actions |
+| Caption | `--text-caption` | 12px | 400/500 | 1.5 | Non-critical metadata only |
 
 Rules:
 
-- Body and hint text never go below 14px. 12px is reserved for short metadata such as a file-kind label.
+- Body and hint text never go below 14px. 12px is reserved for short metadata such as a file-kind label or the allowance line.
 - Paragraph measure is capped at `62ch`.
 - URLs, file names, and tokens use `--font-mono`, 14px minimum, and `overflow-wrap: anywhere`.
-- There is no serif face, no gradient text, and no all-caps Chinese text. Overline casing applies only to Latin labels.
-- A page has one `h1`. Component heading levels follow document order without skipping levels.
+- There is no serif face, no gradient text, and no all-caps Chinese text.
+- Weight is the blog's: 700 for the brand, 500 for titles, buttons, and hints, 400 for prose. Nothing heavier than 700 ships, and no weight is faked (`font-synthesis-weight: none`).
+- A page has one `h1` — the header brand. Component heading levels follow document order without skipping levels.
 
 ## 4. Spacing, Layout & Components
 
@@ -91,23 +94,33 @@ All spacing derives from a 4px base. There are no one-off spacing values in comp
 
 Layout contract:
 
-- Page content uses a 12-column grid with a `1080px` maximum width.
-- Gutters are 16px at 375px, 24px at 768px, and 32px at 1280px.
-- Full-height behavior uses `min-height: 100dvh`, never `100vh` or `h-screen`.
+- Page content uses a `896px` maximum width (the blog's `max-w-4xl`), so both sites break lines at the same width.
+- Gutters are 16px at 375px, 24px at 768px, and 32px at 1280px. The sticky header uses the same gutters but spans the full window, as the blog's bar does.
+- Full-height behavior uses `min-height: 100dvh`, never `100vh` or `h-screen`. The work area and the panels under it stay at the top of the free space; only the footer is pushed to the bottom edge.
 - At 1024px and above, the work area is asymmetric: 7 columns for the form and 5 for the result. Below 1024px it becomes one column.
 - The feature strip is one bordered band, not three floating cards. Its desktop columns are `1.2fr 1.6fr 1.2fr` with hairline vertical dividers.
-- Radii are restrained: 16px for the main work surface, 10px for inputs and buttons, 6px for badges. Pills are reserved for a 6px status dot, not containers.
+- Radii are 0. Every `--radius-*` token resolves to `0`, so a rounded corner cannot reappear by accident; the square corner is the house style, not a default.
 
-Depth strategy: **tonal shift**. Depth comes from `--surface-canvas`, `--surface-raised`, and `--surface-sunken`. Shadows, blur, and `backdrop-filter` are prohibited. Hairline borders are allowed only for controls, dividers, and focus boundaries.
+Depth strategy: **tonal shift**. Depth comes from `--surface-canvas`, `--surface-raised`, and `--surface-sunken`. No shadow token exists. Hairline borders are allowed for controls, dividers, cards, and focus boundaries. Exactly one element may use `backdrop-filter`: the sticky header bar, which floats on `--surface-canvas-blur` the way the blog's `bg-background/60 backdrop-blur-sm` bar does. Nothing else blurs, floats, or overlaps.
 
-### AppHeader And NetworkMark
+### AppHeader And GithubMark
 
-- **Structure**: `header` with the local SVG `NetworkMark`, product name, and a one-line purpose statement. The right-hand aside carries the site navigation (加速 / 数据) and, when a session exists, the SessionChip.
-- **Variants**: anonymous (brand and navigation) and signed-in (brand, navigation, and SessionChip).
-- **Spacing**: `--space-3` between mark and text; `--space-1` between navigation links and `--space-3` between navigation and SessionChip; `--space-4` between brand and aside when stacked, `--space-8` when side by side; `--space-16` from header to work area on desktop.
-- **States**: the mark is static with no hover animation; a navigation link has hover, focus-visible, and current.
-- **Accessibility**: the SVG is decorative and marked as such; the product name is real text; the navigation is a labelled `nav`, and the current entry is marked with an accent tint *and* an accent colour so the state never rests on colour alone.
-- **Motion**: one 320ms fade-and-rise entry on first paint only.
+- **Structure**: one sticky `header` bar with a hairline bottom rule: the brand on the left (the local SVG `GithubMark` — GitHub's octocat, filled with `--text-primary` and knocked out so the surface shows through the cat, so it inverts with the theme exactly as GitHub's own mark does — beside the product name, the whole group being the link home), then — right-aligned — the site navigation (加速 / 数据 / 博客), the theme toggle, and, when a session exists, the SessionChip.
+- **Variants**: anonymous (brand, navigation, theme toggle) and signed-in (the same plus the SessionChip).
+- **Spacing**: `--space-2` between mark and product name; `--space-4` between the brand and the aside; `--space-3` between navigation, toggle, and chip; `--space-1` between navigation links.
+- **States**: the mark is static with no hover animation; a navigation link has hover, focus-visible, and current; the bar itself has no state.
+- **Accessibility**: the SVG is decorative and marked as such; the product name is the page's only `h1`; the navigation is a labelled `nav`, and the current entry is marked with a neutral tint, a heavier weight, *and* `aria-current="page"`, so the state never rests on colour alone. The bar wraps onto further lines at narrow widths instead of scrolling sideways.
+- **Motion**: one 320ms fade-and-rise entry on first paint only, on the work area.
+
+### ThemeToggle
+
+- **Structure**: one `button` holding a single 20px local SVG — a moon while the light theme is active, a sun while the dark theme is active.
+- **Variants**: light and dark. There is no third state.
+- **Spacing**: a `--icon-button-size` (32px) square, flush with the navigation.
+- **States**: default, hover (`--surface-hover`), focus-visible.
+- **Accessibility**: `aria-pressed` reports the current theme, and the label and title name the action (*切换到深色主题* / *切换到浅色主题*), never just the icon. The control is a real `button`, reachable by keyboard, and its 32px box sits inside the 44px row the header already provides.
+- **Motion**: none. Theme changes apply instantly and deliberately have no cross-fade: the swap is a preference, not an animation.
+- **Implementation**: the `dark` class on `<html>` is the single source of truth. `src/theme-init.ts` is imported first by the app entry, so the class is set from the stored-or-system preference before the app mounts and a dark-mode visit never flashes white; the toggle only flips the class and writes the choice back to storage. It must be a module loaded from the bundle, never an inline block, because the deployment's CSP allows `script-src 'self'` with no inline source. A blocked `localStorage` must not break the page.
 
 ### UrlConverter
 
@@ -141,23 +154,23 @@ Depth strategy: **tonal shift**. Depth comes from `--surface-canvas`, `--surface
 - **Structure**: `section` with one `h2`, a one-line lead that names the hourly allowance and the confirmation requirement, and either the entry form or the pending view. The entry form is a two-option mode switch plus a `form` with a name field, a password field, an email field that appears only while registering, and one primary submit. The pending view names the address a link was sent to, repeats the email field, and offers a resend plus a way back to the form. While it is showing, the panel re-reads the session whenever the tab becomes visible or the window regains focus: the mailed link is opened in whichever tab the mail client picks, but the cookie it sets belongs to the whole browser, so returning to this tab is exactly when the confirmation can be noticed.
 - **Variants**: login, register, awaiting confirmation. Submitting is a state, not a variant.
 - **Spacing**: `--space-5` between the panel's blocks, `--space-4` inside the form, `--space-1` between mode segments, `--space-3` between the pending actions, `--space-6` panel padding.
-- **States**: default, hover, focus-visible, invalid, disabled, submitting. The selected mode segment uses `--surface-raised` on a `--surface-sunken` track.
+- **States**: default, hover, focus-visible, invalid, disabled, submitting. The selected mode segment carries the neutral `--accent-soft` tint with primary text on a hairline-bordered track; it is deliberately *not* filled with the accent, because a solid block would compete with the submit button below it.
 - **Accessibility**: the mode switch is a `radiogroup` whose inputs stay focusable but visually hidden, with `:focus-within` drawing the ring on the visible segment; each field links its hint and error through `aria-describedby`; a validation failure moves focus to the field at fault; server errors land on the field that owns them, and only unowned failures use the form-level region. The pending confirmation line is the only success-coloured text in the panel and is announced through `role="status"`, because it reports progress rather than a problem.
 - **Motion**: no entrance of its own; it inherits the work-area entry. The submit label changes in place.
 
 ### SessionChip
 
-- **Structure**: the signed-in account's name, its remaining allowance, an optional reset hint, and one quiet sign-out button.
+- **Structure**: a horizontal cluster inside the header holding the signed-in account's name, its remaining allowance, an optional reset hint, and one quiet sign-out button.
 - **Variants**: allowance remaining, and exhausted. When exhausted the allowance line turns `--status-warning` and the reset hint appears; the hint is shown only then, because the API reports a reset time only once a unit is actually blocking.
-- **Spacing**: `--space-1` between lines, `--space-8` from the brand on desktop.
+- **Spacing**: `--space-3` between the entries, wrapping onto its own line in the header at narrow widths rather than overflowing.
 - **States**: default, hover, focus-visible, disabled, submitting.
-- **Accessibility**: the name is text, not a badge; the exhausted allowance is never signalled by colour alone, because the number itself reads `剩余 0`; right-aligned on desktop and left-aligned when stacked.
+- **Accessibility**: the name is text in the mono face, not a badge; the exhausted allowance is never signalled by colour alone, because the number itself reads `剩余 0`.
 - **Motion**: none.
 
 ### Notice
 
-- **Structure**: a single line of text on a raised surface with a hairline border, used only for page-level conditions that are not tied to one field.
-- **Variants**: `notice--warning` is the only variant shipped.
+- **Structure**: a single line of text on a tinted surface with a matching hairline border, used only for page-level conditions that are not tied to one field. The layout is identical to the blog's alert component.
+- **Variants**: the default tone reports success (green), and `notice--warning` reports a caution or a failure (amber). Both are 5% washes of their hue so they stay quiet on a monochrome page.
 - **Spacing**: `--space-2` between icon and text where an icon is used, `--space-3`/`--space-4` as inner padding.
 - **States**: static.
 - **Accessibility**: `role="alert"` because a condition that blocks work must interrupt; the message names the condition and the way out, and never repeats a URL or a raw error.
@@ -183,12 +196,13 @@ Depth strategy: **tonal shift**. Depth comes from `--surface-canvas`, `--surface
 
 ### Social Preview Card
 
-- **Structure**: a 1200x630 `og.png` served from the build root. An azure bar closes the top, a rounded azure mark carrying the favicon glyph sits beside the public host as the wordmark, the product name is the largest text, one line states the purpose, four capability chips follow, and a ruled footer closes the card.
+- **Structure**: a 1200x630 `og.png` served from the build root. The octocat mark sits beside the public host as the wordmark, the product name is the largest text, one line states the purpose, two capability chips follow, and a ruled footer closes the card.
 - **Variants**: one. It is a static asset under `frontend/public/og.png`, not a component, so nothing here responds to state.
-- **Spacing**: the artwork is drawn at the viewport size with no scrolling and the content box is exactly 1200x630, because a card that overflows is cropped by the platform instead of being scaled.
+- **Spacing**: the artwork is drawn at the viewport size with no scrolling and the content box is exactly 1200x630, because a card that overflows is cropped by the platform instead of being scaled. These dimensions must keep matching `og:image:width` / `og:image:height` in `index.html`.
 - **States**: none.
 - **Accessibility**: every claim on the card repeats text already present on the page, and `og:image:alt` carries the same wording.
-- **Motion**: none. Depth stays tonal, so the card takes the canvas, the azure accent and the hairlines from the tokens above, with no shadow, gradient or glow.
+- **Motion**: none.
+- **Rendering**: the card is the site's own type set in the site's own faces — Geist, Geist Mono, and Noto Sans SC, the last two bundled under `frontend/public/fonts/`. It is drawn on the dark canvas (`#0A0A0A`) with the mark inverted to near-white, so it reads as the dark theme rather than as a second brand. It must be redrawn whenever the palette, the mark, or the product name changes; a stale card is a defect.
 
 ## 5. States & Depth
 
@@ -196,18 +210,20 @@ Every interactive element defines all applicable states. Missing states are a de
 
 | Element | Default | Hover | Active | Focus-visible | Disabled | Loading / Invalid |
 |---------|---------|-------|--------|---------------|----------|-------------------|
-| Input | White, `--border-default` | `--border-strong` | No transform | 2px accent outline plus 2px offset and ring | Sunken surface, muted text, `not-allowed` | Danger border, icon, message, `aria-invalid` |
-| Primary button | Accent background, white label | `--accent-hover` | Translate down 1px | Same outline contract | 45% neutral surface, no pointer | Static label plus transform-based progress line |
-| Copy action | Raised surface, default border | Strong border and icon accent | Translate down 1px | Same outline contract | Hidden or disabled when unavailable | Label changes to confirmed state |
-| Result panel | Raised surface | Not interactive | Not interactive | Focus moves to new action | Not applicable | Skeleton rows or inline error |
-| Account panel | Raised surface, hairline border | Not interactive | Not interactive | Segment ring plus field outlines | Sunken segment track, muted label | Field error below the field; unowned failure in the form region |
-| Mode segment | Sunken track, secondary label | Track stays sunken | No transform | 2px accent outline on the visible segment | Muted label, no pointer | Selected segment turns raised with accent label |
-| Session chip | Canvas, no surface | Quiet button only | Translate down 1px | Same outline contract | Hidden when signed out | Exhausted allowance in `--status-warning` |
-| Notice | Raised surface, warning border | Not interactive | Not interactive | No focus stop | Not applicable | Not applicable |
+| Input | Input surface, `--border-default` | `--border-strong` | No transform | 2px `--ring` outline plus 2px offset | Sunken surface, muted text, `not-allowed` | Danger border, icon, message, `aria-invalid` |
+| Primary button | Accent background, `--text-on-accent` label | `--accent-hover` | Translate down 1px | Same outline contract | Sunken surface, muted text, no pointer | Static label plus `aria-busy` |
+| Quiet button | Transparent, `--border-default`, primary label | Hover surface | Translate down 1px | Same outline contract | Muted label, no pointer | Not applicable |
+| Icon button | Transparent, muted glyph | Hover surface plus primary glyph | No transform | Same outline contract | Muted glyph, no pointer | Not applicable |
+| Result panel | Raised surface, hairline border | Not interactive | Not interactive | Focus moves to new action | Not applicable | Skeleton rows or inline error |
+| Account panel | Raised surface, hairline border | Not interactive | Not interactive | Segment ring plus field outlines | Muted label, no pointer | Field error below the field; unowned failure in the form region |
+| Mode segment | Hairline track, muted label | Track unchanged, primary label | No transform | 2px `--ring` outline on the visible segment | Muted label, no pointer | Selected segment takes the `--accent-soft` tint with primary text |
+| Session chip | Inside the header bar, no surface of its own | Quiet button only | Translate down 1px | Same outline contract | Hidden when signed out | Exhausted allowance in `--status-warning` |
+| Theme toggle | Transparent, muted glyph | Hover surface plus primary glyph | No transform | Same outline contract | Not applicable | Not applicable |
+| Notice | 5% success wash, matching border | Not interactive | Not interactive | No focus stop | Not applicable | Not applicable |
 | Feature strip | Static | Not interactive | Not interactive | No focus stop | Not applicable | Not applicable |
 | Data table | Raised surface, hairline row rules | Not interactive | Not interactive | No focus stop; the table is not a control | Not applicable | Loading line or inline error replaces the rows |
 | Auth status line | Canvas, success-coloured text | Not interactive | Not interactive | No focus stop | Not applicable | Names the mailed address; never carries a failure |
-| Nav link | Canvas, no surface | Sunken tint plus primary text | Translate down 1px | Same outline contract | Not applicable | Current entry: accent tint plus accent text |
+| Nav link | Canvas, no surface | Hover surface plus primary text | Translate down 1px | Same outline contract | Not applicable | Current entry: `--accent-soft` tint, heavier weight, and `aria-current="page"` |
 
 Error presentation rules:
 
@@ -243,7 +259,8 @@ Rules:
 
 - First paint fades from opacity 0 to 1 while translating 8px upward. It runs once.
 - Result success or error fades and translates 8px upward. It does not bounce, shake, or flash.
-- Skeleton loading uses a slow opacity pulse between 0.55 and 1. It never animates background position.
+- Skeleton loading uses a slow opacity pulse between 0.45 and 1. It never animates background position.
+- Every wait state carries a skeleton whose box matches the content it stands in for — the same card, columns, padding and control heights — so the real content lands without shifting the page. The bars are `aria-hidden`; the wait itself is still announced in words by a visually hidden live region, and the existing status text is never removed.
 - No infinite decorative motion, parallax, marquee, typing effect, or scroll listener exists.
 - `prefers-reduced-motion: reduce` sets all durations and delays to 1ms, removes transforms and skeleton pulsing, and keeps the loading label plus `aria-busy` as the state signal.
 
@@ -264,37 +281,41 @@ Accessibility contract:
 ### 375px, Mobile
 
 - Use 16px gutters and a single column.
-- The page title uses the lower end of `--text-display`; no text wraps into more than three lines.
-- Input and button stack vertically at full width, each at least 48px high.
+- The header wraps: brand on the first line, navigation and theme toggle on the second, the session chip on a third when signed in. It never shrinks, overlaps, or scrolls sideways.
+- Input and button stack vertically at full width, each at least 44px high.
 - The result panel appears directly below the form without an intermediate hero band.
 - The feature strip stacks into three rows separated by 1px horizontal dividers; it is not a horizontal scroller.
 - Long URLs break inside the input and result without expanding the page.
 
 ### 768px, Tablet
 
-- Use 24px gutters and a 720px maximum content width.
+- Use 24px gutters and one column of work area.
+- The header fits on one line.
 - The work area is still one column so the form and result are not compressed.
 - The feature strip becomes a single horizontal band with three unequal columns and vertical dividers.
 - The primary action remains full width directly under the input.
 
 ### 1280px, Desktop
 
-- Use 32px gutters and the 1080px maximum content width.
+- Use 32px gutters and the 896px maximum content width.
 - The work area becomes an asymmetric 7/5 grid: form left, result right, with `--space-10` between columns.
 - The form and result panel align to the top. Neither is vertically centered in a decorative hero.
-- The title, form, result, and feature strip all sit on the same visible alignment rhythm.
+- The header bar spans the window while the content column stays centered, exactly as the blog's inner pages are laid out.
+- The form, result, feature strip, and promo card all sit on the same visible alignment rhythm.
 
 ### Anti-Slop Checklist
 
 Every component and review must satisfy all of these:
 
-- One primary conversion flow; no secondary navigation, pricing, testimonials, or marketing sections.
-- No centered hero, gradient background, gradient text, glow, glassmorphism, or `backdrop-filter`.
+- One primary conversion flow; no secondary navigation beyond the header, no pricing, testimonials, or marketing sections.
+- No centered hero, gradient background, gradient text, glow, or glassmorphism. `backdrop-filter` is used by the sticky header bar and by nothing else.
 - No decorative dashboard cards, nested cards, bento grid, fake charts, fake usage metrics, or fake testimonials.
-- No three equal feature cards; the capability strip is one band with unequal columns.
-- No emoji used as an icon or in visible copy. All icons are local SVG primitives with consistent 1.75px stroke.
+- No three equal floating feature cards; the capability strip is one band with unequal columns.
+- No emoji used as an icon or in visible copy. All icons are local SVG primitives with consistent 1.75px–2px stroke.
 - No third-party font, icon, script, analytics, or tracking request. Fonts and icons are same-origin assets.
 - No raw hex, magic spacing, arbitrary font size, or ad-hoc easing in components; all values come from this document.
+- No hidden state that exists in only one theme. Every surface, border, and text pair is defined in both the light and the dark palette; a hardcoded colour, or a `#fff` that assumes a light page, is a defect.
 - No `100vh`, horizontal scroll, decorative infinite animation, or motion that ignores reduced-motion.
 - No value is displayed unless it came from the API. Unknown metadata stays absent.
+- No rounded corner. The radius tokens are 0 and no component may restate a pixel radius.
 - Any new reusable pattern used twice or a genuinely new semantic token must be added here before implementation continues.

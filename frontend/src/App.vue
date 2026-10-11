@@ -12,7 +12,6 @@ import {
 } from "./api/client";
 import AppHeader from "./components/AppHeader.vue";
 import AuthPanel from "./components/AuthPanel.vue";
-import BlogPromo from "./components/BlogPromo.vue";
 import FeatureStrip from "./components/FeatureStrip.vue";
 import StatsPanel from "./components/StatsPanel.vue";
 import UrlConverter from "./components/UrlConverter.vue";
@@ -136,64 +135,88 @@ async function handleUnauthorized(): Promise<void> {
       :page="page"
       @logout="handleLogout"
     />
-    <main id="main" class="page__main">
-      <p v-if="sessionError" class="notice notice--warning" role="alert">{{ sessionError }}</p>
-      <StatsPanel v-if="page === 'stats'" />
-      <template v-else>
-        <p v-if="confirmed" class="notice" role="status" data-test="verified-notice">
-          邮箱验证成功，已自动登录。
+    <div class="page__body">
+      <main id="main" class="page__main">
+        <!-- The header carries the brand, so the page opens with a lead line —
+             the way the blog's inner pages do. -->
+        <p v-if="page === 'accelerator'" class="page__lead">
+          把 Release、归档与 raw / blob 链接解析为同源下载，并把 GitHub 页面镜像为同源地址，保留
+          Range 与流式传输。
         </p>
-        <p v-if="verifyFailed" class="notice notice--warning" role="alert" data-test="verify-failed">
-          验证链接无效或已过期，请重新获取。
-        </p>
-        <p v-if="ssoConfirmed" class="notice" role="status" data-test="sso-notice">
-          已通过博客账号登录。
-        </p>
-        <p v-if="ssoError" class="notice notice--warning" role="alert" data-test="sso-error">
-          {{ ssoError }}
-        </p>
-        <p
-          v-if="limited || quotaExhausted"
-          class="notice notice--warning"
-          role="alert"
-          data-test="quota-notice"
-        >
-          本小时的访问额度已用完，请在额度重置后再试。
-        </p>
-        <p v-if="redeemConfirmed" class="redeem__notice" role="status" data-test="redeem-notice">
-          已在博客钱包完成兑换，额度已恢复。
-        </p>
-        <div
-          v-if="quotaExhausted && sessionState === 'authenticated' && providers.redeemEnabled"
-          class="redeem"
-          data-test="redeem-panel"
-        >
-          <p class="redeem__lead">
-            额度用完了，去博客钱包用博客积分兑换额外次数（那儿能看到余额和积分是怎么来的）。
+        <p v-if="sessionError" class="notice notice--warning" role="alert">{{ sessionError }}</p>
+        <StatsPanel v-if="page === 'stats'" />
+        <template v-else>
+          <p v-if="confirmed" class="notice" role="status" data-test="verified-notice">
+            邮箱验证成功，已自动登录。
           </p>
-          <a
-            class="button button--primary redeem__button"
-            :href="BLOG_WALLET_URL"
-            data-test="redeem-button"
+          <p
+            v-if="verifyFailed"
+            class="notice notice--warning"
+            role="alert"
+            data-test="verify-failed"
           >
-            去博客钱包兑换
-          </a>
-        </div>
-        <p v-if="sessionState === 'loading'" class="page__status" role="status">
-          正在检查登录状态。
-        </p>
-        <AuthPanel v-else-if="sessionState === 'anonymous'" @authenticated="refreshSession" />
-        <UrlConverter
-          v-else
-          :disabled="quotaExhausted"
-          @resolved="refreshSession"
-          @unauthorized="handleUnauthorized"
-          @quota-exceeded="refreshSession"
-        />
-      </template>
-    </main>
-    <FeatureStrip v-if="page === 'accelerator'" />
-    <BlogPromo v-if="page === 'accelerator'" />
+            验证链接无效或已过期，请重新获取。
+          </p>
+          <p v-if="ssoConfirmed" class="notice" role="status" data-test="sso-notice">
+            已通过博客账号登录。
+          </p>
+          <p v-if="ssoError" class="notice notice--warning" role="alert" data-test="sso-error">
+            {{ ssoError }}
+          </p>
+          <p
+            v-if="limited || quotaExhausted"
+            class="notice notice--warning"
+            role="alert"
+            data-test="quota-notice"
+          >
+            本小时的访问额度已用完，请在额度重置后再试。
+          </p>
+          <p v-if="redeemConfirmed" class="redeem__notice" role="status" data-test="redeem-notice">
+            已在博客钱包完成兑换，额度已恢复。
+          </p>
+          <div
+            v-if="quotaExhausted && sessionState === 'authenticated' && providers.redeemEnabled"
+            class="redeem"
+            data-test="redeem-panel"
+          >
+            <p class="redeem__lead">
+              额度用完了，去博客钱包用博客积分兑换额外次数（那儿能看到余额和积分是怎么来的）。
+            </p>
+            <a
+              class="button button--primary redeem__button"
+              :href="BLOG_WALLET_URL"
+              data-test="redeem-button"
+            >
+              去博客钱包兑换
+            </a>
+          </div>
+          <template v-if="sessionState === 'loading'">
+            <!-- The wait is announced in words; the card below wears the same
+                 frame and rhythm as the panel that replaces it, so the landing
+                 state drops in without shifting the page. -->
+            <p class="page__status sr-only" role="status">正在检查登录状态。</p>
+            <div class="session-skeleton" aria-hidden="true">
+              <span class="skeleton session-skeleton__title"></span>
+              <span class="skeleton session-skeleton__lead"></span>
+              <span class="skeleton session-skeleton__lead session-skeleton__lead--short"></span>
+              <span class="skeleton session-skeleton__segment"></span>
+              <span class="skeleton session-skeleton__field"></span>
+              <span class="skeleton session-skeleton__field"></span>
+              <span class="skeleton session-skeleton__button"></span>
+            </div>
+          </template>
+          <AuthPanel v-else-if="sessionState === 'anonymous'" @authenticated="refreshSession" />
+          <UrlConverter
+            v-else
+            :disabled="quotaExhausted"
+            @resolved="refreshSession"
+            @unauthorized="handleUnauthorized"
+            @quota-exceeded="refreshSession"
+          />
+        </template>
+      </main>
+      <FeatureStrip v-if="page === 'accelerator'" />
+    </div>
     <footer class="page__footer">
       <p>仅代理 GitHub 官方文件与页面，不记录用户提交的地址。</p>
       <a class="page__footer-link" :href="BLOG_URL" target="_blank" rel="noopener noreferrer">
@@ -204,6 +227,41 @@ async function handleUnauthorized(): Promise<void> {
 </template>
 
 <style scoped>
+/* Stand-in for the panel that replaces it once the session is known: the same
+   frame, padding and control heights, so switching between the skeleton, the
+   sign-in panel and the converter never moves the page. */
+.session-skeleton {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  border: var(--border-hairline);
+  border-radius: var(--radius-surface);
+  background-color: var(--surface-raised);
+}
+
+.session-skeleton__title {
+  width: 50%;
+  height: var(--space-5);
+}
+
+.session-skeleton__lead {
+  height: var(--space-3);
+}
+
+.session-skeleton__lead--short {
+  width: 65%;
+}
+
+.session-skeleton__segment,
+.session-skeleton__field {
+  height: var(--target-min);
+}
+
+.session-skeleton__button {
+  width: var(--space-20);
+  height: var(--target-min);
+}
+
 .redeem {
   display: grid;
   gap: var(--space-3);

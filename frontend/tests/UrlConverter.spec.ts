@@ -73,6 +73,21 @@ describe("UrlConverter", () => {
     expect(view.get("form").get("button[type='submit']").attributes("disabled")).toBeUndefined();
   });
 
+  it("holds the result panel's shape with bars while resolving", async () => {
+    fetchMock.mockReturnValue(new Promise(() => {}));
+    const view = mountConverter();
+
+    await view.get("input#source-url").setValue(RELEASE_URL);
+    await view.get("form").trigger("submit");
+
+    const panel = view.get("[data-test='result-panel']");
+    expect(panel.attributes("data-state")).toBe("loading");
+    const skeleton = panel.get(".result__skeleton");
+    expect(skeleton.attributes("aria-hidden")).toBe("true");
+    expect(skeleton.findAll(".skeleton")).toHaveLength(3);
+    expect(view.get("button[type='submit']").attributes("aria-busy")).toBe("true");
+  });
+
   it("trims surrounding whitespace before calling the same-origin API", async () => {
     fetchMock.mockResolvedValue(jsonResponse(resolvedBody("release", RELEASE_URL)));
     const view = mountConverter();

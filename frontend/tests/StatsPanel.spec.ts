@@ -43,7 +43,9 @@ describe("StatsPanel", () => {
     const view = mount(StatsPanel);
 
     expect(view.get("[role='status']").text()).toBe("正在加载统计数据。");
-    expect(view.find("table").exists()).toBe(false);
+    // The bars stand in for the table, but no cell carries a figure yet.
+    expect(view.find("table[aria-hidden='true']").exists()).toBe(true);
+    expect(view.find("[data-test='stats-downloads']").exists()).toBe(false);
     view.unmount();
   });
 

@@ -35,7 +35,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 打开 <http://127.0.0.1:8000/>，首次访问会要求注册或登录，之后按账号计量；页头导航可以切到公开的数据页 `/stats`。`pnpm build` 未执行时服务仍可启动，但只提供 API（同样需要登录）。
 
-字体是自托管的（4.36 MiB），因为 CSP 为 `font-src 'self'`。重新抓取用 `uv run python scripts/fetch_fonts.py`。
+字体是自托管的（4.45 MiB），因为 CSP 为 `font-src 'self'`。用的是与博客同一套字：Geist 与 Geist Mono 负责拉丁文（各 5～6 个分片），Noto Sans SC 负责中文（Geist 没有中日韩字形，中文回退到它）。重新抓取用 `uv run python scripts/fetch_fonts.py`，生成结果会写回 `frontend/src/styles/fonts.css`。
 
 ## 接口
 
@@ -178,7 +178,7 @@ GET /acme/widgets?tab=...  -> 查询串一并透传
 - 自有页面（`/` 与 `/stats`）是可索引的。`index.html` 带 `rel="canonical"`、Open Graph、Twitter Card 与 `WebApplication` 结构化数据；`<noscript>` 里另有一段可被爬虫读到的正文，否则 SPA 除了首屏模板对爬虫没有可读内容。
 - `/robots.txt` 与 `/sitemap.xml` 由后端生成，基地址取 `PUBLIC_BASE_URL`，所以换域名不需要改代码。`robots.txt` 禁掉 `/api/` 与 `/proxy/`（不是内容页）并指向 sitemap。`/og.png` 是社交预览图，构建产物里没有就返回 404 信封。
 - **镜像页面一律带 `X-Robots-Tag: noindex, nofollow`**。镜像内容与 GitHub 原文逐字相同，若允许收录，本站会与原文争夺同一批查询，两边都受损。
-- 访问统计用 Umami：自有页面加载 `cloud.umami.is` 的脚本并上报到 `gateway.umami.is`，这两个来源在自有 CSP 的 `script-src` 与 `connect-src` 里被显式列出；镜像页面仍是 `script-src 'none'`，统计只在自有 shell 上运行。注意 `Referrer-Policy: no-referrer` 与统计并存，因此报表里没有来源页，这是有意的隐私取舍。
+- 访问统计用自托管的 Umami：自有页面加载 `u.1zyq1.com` 的脚本并上报到同一台主机，该来源在自有 CSP 的 `script-src` 与 `connect-src` 里被显式列出；镜像页面仍是 `script-src 'none'`，统计只在自有 shell 上运行。注意 `Referrer-Policy: no-referrer` 与统计并存，因此报表里没有来源页，这是有意的隐私取舍。
 - `index.html` 里的 canonical 与 `og:*` 地址写死为 `https://github.1zyq1.com/`。**换域名时这里必须和 `PUBLIC_BASE_URL` 一起改**：`spa_shell` 用 `FileResponse` 直接下发产物，没有做变量注入，理由是保留 ETag/304 这条廉价路径。
 
 ## 部署
@@ -242,4 +242,4 @@ Remove-Item -Recurse -Force .cache/archives/*
 - **容器未实机验证**：本机没有 Docker CLI（`docker` 与 `docker compose` 均为 CommandNotFoundException），`Dockerfile` 与 `compose.yaml` 只做过静态核对，未执行 `docker build` / `compose up`。
 - 8080/8000 端口被其他进程占用时，改用其他端口启动。
 
-设计规范见 [DESIGN.md](DESIGN.md)：浅色单一 azure 主色、仅靠色阶拉开层次、无阴影无渐变无毛玻璃、无虚假指标。
+设计规范见 [DESIGN.md](DESIGN.md)：与博客同源的黑白灰单色、全直角、细边框构成的色阶层次、明暗双主题与吸顶毛玻璃导航栏、无阴影无渐变、无虚假指标。字体与博客一致（Geist / Geist Mono / Noto Sans SC，均自托管）。

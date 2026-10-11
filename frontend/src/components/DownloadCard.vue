@@ -109,9 +109,9 @@ function resetConverter(): void {
     </p>
 
     <div v-if="state === 'loading'" class="result__skeleton" aria-hidden="true">
-      <span class="result__skeleton-line result__skeleton-line--badge"></span>
-      <span class="result__skeleton-line result__skeleton-line--title"></span>
-      <span class="result__skeleton-line result__skeleton-line--action"></span>
+      <span class="skeleton result__skeleton-badge"></span>
+      <span class="skeleton result__skeleton-title"></span>
+      <span class="skeleton result__skeleton-action"></span>
     </div>
 
     <div v-else-if="state === 'error'" class="result__notice">
@@ -210,47 +210,25 @@ function resetConverter(): void {
   gap: var(--space-3);
 }
 
-.result__skeleton-line {
-  display: block;
-  height: var(--space-4);
-  border-radius: var(--radius-badge);
-  background-color: var(--surface-sunken);
-}
-
-.result__skeleton-line--badge {
+.result__skeleton-badge {
   width: var(--space-16);
   height: var(--space-6);
 }
 
-.result__skeleton-line--title {
+.result__skeleton-title {
   width: 75%;
   height: var(--space-6);
 }
 
-.result__skeleton-line--action {
+.result__skeleton-action {
   width: 60%;
   height: var(--target-min);
-  border-radius: var(--radius-control);
 }
 
+/* Offset the widest bar so the three do not breathe in lockstep. */
 @media (prefers-reduced-motion: no-preference) {
-  .result__skeleton-line {
-    animation: skeleton-pulse 1.6s var(--ease-standard) infinite;
-  }
-
-  .result__skeleton-line--action {
+  .result__skeleton-action {
     animation-delay: var(--duration-standard);
-  }
-}
-
-@keyframes skeleton-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.45;
   }
 }
 
@@ -280,15 +258,15 @@ function resetConverter(): void {
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-badge);
   background-color: var(--accent-soft);
-  color: var(--accent);
+  color: var(--text-secondary);
   font-size: var(--text-caption-size);
-  font-weight: 600;
+  font-weight: 500;
   line-height: var(--text-caption-leading);
 }
 
 .result__file {
   font-size: var(--text-subheading-size);
-  font-weight: 650;
+  font-weight: 500;
   line-height: var(--text-subheading-leading);
   overflow-wrap: anywhere;
 }

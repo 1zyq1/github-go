@@ -447,7 +447,7 @@ onUnmounted(stopWatching);
 
 .auth__title {
   font-size: var(--text-subheading-size);
-  font-weight: 650;
+  font-weight: 500;
   line-height: var(--text-subheading-leading);
 }
 
@@ -471,7 +471,7 @@ onUnmounted(stopWatching);
   padding: var(--space-1);
   border: var(--border-hairline);
   border-radius: var(--radius-control);
-  background-color: var(--surface-sunken);
+  background-color: transparent;
 }
 
 .auth__mode {
@@ -480,16 +480,27 @@ onUnmounted(stopWatching);
   justify-content: center;
   min-height: var(--target-min);
   border-radius: var(--radius-badge);
-  color: var(--text-secondary);
+  color: var(--text-muted);
   cursor: pointer;
   font-size: var(--text-small-size);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
 
+.auth__mode:hover {
+  color: var(--text-primary);
+}
+
+/* The selected mode carries a neutral tint and primary text, the same
+   restrained treatment the blog gives its active and expanded controls —
+   a solid fill here would compete with the submit button below. */
 .auth__mode--active {
-  background-color: var(--surface-raised);
-  color: var(--accent);
+  background-color: var(--accent-soft);
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .auth__mode:focus-within {
@@ -541,12 +552,13 @@ onUnmounted(stopWatching);
   line-height: var(--text-small-leading);
 }
 
+/* The divider rules take the border colour, not the border shorthand. */
 .auth__divider::before,
 .auth__divider::after {
   content: "";
   flex: 1;
   height: 1px;
-  background-color: var(--border-hairline);
+  background-color: var(--border-default);
 }
 
 .auth__sso-button {

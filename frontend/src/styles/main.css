@@ -1,48 +1,63 @@
-/* Global reset and design tokens only. Every value here mirrors DESIGN.md. */
+/* Global reset and design tokens only. Every value mirrors DESIGN.md.
+ *
+ * The palette, the square corners and the light/dark pair are the ones the blog
+ * (1zyq1.com) renders with, so the two sites read as one product:
+ *   - one monochrome ladder (near-black on white, near-white on #030303),
+ *     with colour reserved for state (green / amber / red);
+ *   - no rounded corners anywhere (radius tokens are all 0);
+ *   - depth stays tonal — hairline borders and tinted surfaces, never shadow
+ *     or gradient;
+ *   - dark mode is a real second theme, not an inverted filter. */
 
 :root {
   color-scheme: light;
 
-  --surface-canvas: #f5f6f8;
-  --surface-raised: #ffffff;
-  --surface-sunken: #edeff3;
-  --surface-inverse: #0d1117;
-  --text-primary: #0d1117;
-  --text-secondary: #3d4653;
-  --text-muted: #5b6472;
+  --surface-canvas: #ffffff;
+  --surface-raised: #fafafa;
+  --surface-sunken: #f5f5f5;
+  /* Skeleton bars sit on a raised card, so they need one step more contrast
+     than the sunken surface to read at all (the blog's gray-200/70). */
+  --surface-skeleton: #e5e5e5;
+  /* The sticky header floats over the page on a translucent wash of the canvas
+     colour, the way the blog's `bg-background/60` bar does. */
+  --surface-canvas-blur: rgb(255 255 255 / 60%);
+  /* Text fields keep the page colour and lean on the border instead. */
+  --surface-input: #ffffff;
+  --surface-hover: #f5f5f5;
+
+  --text-primary: #0a0a0a;
+  --text-secondary: #404040;
+  --text-muted: #737373;
   --text-on-accent: #ffffff;
-  --border-default: #d5dae1;
-  --border-strong: #a8b1bd;
-  --accent: #0b5fa5;
-  --accent-hover: #084c87;
-  --accent-soft: #e8f0f9;
-  --accent-ring: rgb(11 95 165 / 32%);
+
+  --border-default: #e5e5e5;
+  --border-strong: #a3a3a3;
+
+  --accent: #171717;
+  --accent-hover: #404040;
+  --accent-soft: #f5f5f5;
+  --ring: #171717;
+
   --status-success: #15803d;
-  --status-success-soft: #ecfdf3;
-  --status-warning: #a16207;
-  --status-danger: #b42318;
-  --status-danger-soft: #fef3f2;
+  --status-success-soft: rgb(34 197 94 / 5%);
+  --status-warning: #b45309;
+  --status-warning-soft: rgb(245 158 11 / 5%);
+  --status-danger: #dc2626;
+  --status-danger-soft: rgb(239 68 68 / 5%);
 
-  --font-sans:
-    "Plus Jakarta Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --font-sans: "Geist", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 
-  --text-display-size: clamp(2rem, 1.5rem + 2vw, 2.75rem);
-  --text-display-leading: 1.15;
-  --text-heading-size: 1.5rem;
-  --text-heading-leading: 1.3;
+  /* The type ramp the blog renders with: 20px card titles, 16px body, 14px
+     actions and hints, 12px metadata. Nothing smaller than 12px ships. */
   --text-subheading-size: 1.25rem;
   --text-subheading-leading: 1.4;
-  --text-lead-size: 1.125rem;
-  --text-lead-leading: 1.55;
   --text-body-size: 1rem;
   --text-body-leading: 1.625;
   --text-small-size: 0.875rem;
   --text-small-leading: 1.55;
   --text-caption-size: 0.75rem;
   --text-caption-leading: 1.5;
-  --text-overline-size: 0.75rem;
-  --text-overline-leading: 1.4;
   --text-measure: 62ch;
 
   --space-1: 0.25rem;
@@ -57,15 +72,17 @@
   --space-16: 4rem;
   --space-20: 5rem;
 
-  --radius-surface: 1rem;
-  --radius-control: 0.625rem;
-  --radius-badge: 0.375rem;
-  --radius-dot: 0.375rem;
+  /* The blog is a square-cornered design; every radius token is 0 so no
+     component can reintroduce a rounded corner by accident. */
+  --radius-surface: 0;
+  --radius-control: 0;
+  --radius-badge: 0;
 
   --border-hairline: 1px solid var(--border-default);
-  --focus-outline: 2px solid var(--accent);
+  --focus-outline: 2px solid var(--ring);
   --focus-offset: 2px;
   --target-min: 2.75rem;
+  --icon-button-size: 2rem;
 
   --duration-fast: 120ms;
   --duration-standard: 200ms;
@@ -73,11 +90,43 @@
   --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-out: ease-out;
 
-  --layout-max-width: 67.5rem;
-  --layout-tablet-max-width: 45rem;
+  /* Content column: the blog's inner pages cap at `max-w-4xl`, so the two sites
+     break lines at the same width. */
+  --layout-max-width: 56rem;
   --gutter-mobile: var(--space-4);
   --gutter-tablet: var(--space-6);
   --gutter-desktop: var(--space-8);
+}
+
+/* The blog's dark theme: a near-black page (its hero uses #030303) with
+   translucent white surfaces, and the accent flipped to near-white. */
+.dark {
+  color-scheme: dark;
+
+  --surface-canvas: #030303;
+  --surface-raised: rgb(255 255 255 / 5%);
+  --surface-sunken: rgb(255 255 255 / 8%);
+  --surface-skeleton: rgb(255 255 255 / 14%);
+  --surface-canvas-blur: rgb(3 3 3 / 60%);
+  --surface-input: rgb(0 0 0 / 40%);
+  --surface-hover: rgb(255 255 255 / 10%);
+
+  --text-primary: #fafafa;
+  --text-secondary: #d4d4d4;
+  --text-muted: #a3a3a3;
+  --text-on-accent: #0a0a0a;
+
+  --border-default: rgb(255 255 255 / 10%);
+  --border-strong: rgb(255 255 255 / 25%);
+
+  --accent: #ebebeb;
+  --accent-hover: #bfbfbf;
+  --accent-soft: rgb(255 255 255 / 10%);
+  --ring: #ebebeb;
+
+  --status-success: #4ade80;
+  --status-warning: #fbbf24;
+  --status-danger: #f87171;
 }
 
 *,
@@ -132,8 +181,13 @@ svg {
 
 @media (prefers-contrast: more) {
   :root {
-    --border-default: #6b7480;
-    --text-muted: #454e5a;
+    --border-default: #6b7280;
+    --text-muted: #404040;
+  }
+
+  .dark {
+    --border-default: rgb(255 255 255 / 40%);
+    --text-muted: #d4d4d4;
   }
 }
 
@@ -149,8 +203,15 @@ svg {
 
 .page {
   display: grid;
-  grid-template-rows: auto 1fr auto auto auto;
+  grid-template-rows: auto 1fr auto;
   min-height: 100dvh;
+}
+
+/* The work area and the panels below it travel together and stay at the top of
+   the free space; only the footer is pushed to the bottom of the viewport. */
+.page__body {
+  display: grid;
+  align-content: start;
 }
 
 .page__main,
@@ -165,7 +226,17 @@ svg {
   align-content: start;
   gap: var(--space-6);
   width: 100%;
+  padding-top: var(--space-8);
   padding-bottom: var(--space-8);
+}
+
+/* The header carries the brand, so the page body opens with a lead instead of
+   a second title — the blog's inner pages read the same way. */
+.page__lead {
+  max-width: var(--text-measure);
+  color: var(--text-muted);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-leading);
 }
 
 .page__footer {
@@ -180,13 +251,59 @@ svg {
 }
 
 .page__footer-link {
-  color: var(--accent);
+  color: var(--text-primary);
   font-weight: 600;
   text-decoration: none;
 }
 
 .page__footer-link:hover {
   text-decoration: underline;
+}
+
+.page__status {
+  color: var(--text-muted);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-leading);
+}
+
+/* Loading placeholders. Each one copies the box of the content it stands in for
+   -- the same border, padding and rhythm -- so nothing shifts when the real data
+   lands. A bar is a flat tint of the sunken surface, never a shadow, and the
+   pulse is the only motion here, so it stops for reduced-motion users. */
+.skeleton {
+  display: block;
+  background-color: var(--surface-skeleton);
+}
+
+/* The wait is announced in words by a live region; the bars only carry the
+   shape, so they stay out of the accessibility tree. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .skeleton {
+    animation: skeleton-pulse 1.6s var(--ease-standard) infinite;
+  }
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.45;
+  }
 }
 
 .converter {
@@ -201,12 +318,12 @@ svg {
 
 .field__label {
   font-size: var(--text-small-size);
-  font-weight: 650;
+  font-weight: 500;
   line-height: var(--text-small-leading);
 }
 
 .field__hint {
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-size: var(--text-caption-size);
   line-height: var(--text-caption-leading);
 }
@@ -222,12 +339,14 @@ svg {
   padding: var(--space-3);
   border: var(--border-hairline);
   border-radius: var(--radius-control);
-  background-color: var(--surface-raised);
+  background-color: var(--surface-input);
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: var(--text-small-size);
   line-height: var(--text-body-leading);
-  transition: border-color var(--duration-fast) var(--ease-standard);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
 }
 
 /* Credentials are names, not URLs or file names, so they use the text face. */
@@ -245,7 +364,7 @@ svg {
 }
 
 .field__input:focus-visible {
-  border-color: var(--accent);
+  border-color: var(--text-primary);
 }
 
 .field__input[aria-invalid="true"] {
@@ -272,7 +391,7 @@ svg {
   border: var(--border-hairline);
   border-radius: var(--radius-control);
   font-size: var(--text-small-size);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
   text-decoration: none;
   transition:
@@ -282,14 +401,15 @@ svg {
     transform var(--duration-fast) var(--ease-out);
 }
 
+/* Primary is the blog's `bg-primary` button: near-black on white, and the
+   mirror image of that in dark mode. */
 .button--primary {
-  border-color: var(--accent);
+  border-color: transparent;
   background-color: var(--accent);
   color: var(--text-on-accent);
 }
 
 .button--primary:hover:not(:disabled) {
-  border-color: var(--accent-hover);
   background-color: var(--accent-hover);
 }
 
@@ -301,37 +421,68 @@ svg {
 }
 
 .button--quiet {
+  border-color: var(--border-default);
   background-color: transparent;
-  color: var(--accent);
+  color: var(--text-primary);
 }
 
-.button--quiet:hover {
-  background-color: var(--accent-soft);
+.button--quiet:hover:not(:disabled) {
+  background-color: var(--surface-hover);
 }
 
-/* Page-level condition banners. Depth stays tonal: no shadow, no gradient. */
+.button--quiet:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* Square icon button: the theme toggle and the header glyphs, sized like the
+   blog's `size-8` controls. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-button-size);
+  height: var(--icon-button-size);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background-color: transparent;
+  color: var(--text-muted);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.icon-button:hover {
+  background-color: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.icon-button svg {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+
+/* Page-level condition banners, in the blog's alert tones: a tinted border and
+   a 5% wash of the same hue. Depth stays tonal — no shadow, no gradient. */
 .notice {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
-  border: var(--border-hairline);
+  border: 1px solid rgb(34 197 94 / 30%);
   border-radius: var(--radius-control);
+  background-color: var(--status-success-soft);
+  color: var(--status-success);
   font-size: var(--text-small-size);
   line-height: var(--text-small-leading);
   overflow-wrap: anywhere;
 }
 
 .notice--warning {
-  border-color: var(--status-warning);
-  background-color: var(--surface-raised);
+  border-color: rgb(245 158 11 / 30%);
+  background-color: var(--status-warning-soft);
   color: var(--status-warning);
-}
-
-.page__status {
-  color: var(--text-secondary);
-  font-size: var(--text-small-size);
-  line-height: var(--text-small-leading);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -364,6 +515,7 @@ svg {
 
   .page__main {
     gap: var(--space-8);
+    padding-top: var(--space-10);
     padding-bottom: var(--space-10);
   }
 }

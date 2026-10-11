@@ -23,10 +23,17 @@ USER_AGENT = (
 ALLOWED_HOSTS = frozenset({"fonts.googleapis.com", "fonts.gstatic.com"})
 _FONT_FACE = re.compile(r"@font-face\s*\{(.*?)\}", re.DOTALL)
 _WOFF2_URL = re.compile(r"url\((https://[^)]+\.woff2)\)")
+# The families are the ones the blog (1zyq1.com) renders with, so both sites
+# share one voice: Geist for Latin text, Geist Mono for addresses, and
+# Noto Sans SC as the CJK fallback Geist has no glyphs for.
 _FAMILY_SOURCES: dict[str, tuple[str, str]] = {
-    "Plus Jakarta Sans": (
-        "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@200..800&display=swap",
-        "jakarta",
+    "Geist": (
+        "https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap",
+        "geist",
+    ),
+    "Geist Mono": (
+        "https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&display=swap",
+        "geist-mono",
     ),
     "Noto Sans SC": (
         "https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@100..900&display=swap",

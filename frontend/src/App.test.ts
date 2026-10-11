@@ -88,6 +88,8 @@ describe("App", () => {
     const view = mount(App);
 
     expect(view.get(".page__status").text()).toBe("正在检查登录状态。");
+    // The skeleton holds the frame the panel or converter will land in.
+    expect(view.find(".session-skeleton").exists()).toBe(true);
     expect(view.find(".converter").exists()).toBe(false);
     view.unmount();
   });

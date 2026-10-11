@@ -8,8 +8,14 @@
       name="description"
       content="粘贴 GitHub 文件地址，安全解析为同源下载链接，保留 Range 与流式传输，不记录地址。"
     />
-    <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#f5f6f8" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#030303" media="(prefers-color-scheme: dark)" />
+    <!--
+      Theme bootstrap lives in `src/theme-init.ts` and is imported first by the
+      app entry. It cannot be an inline block here: the deployment's CSP allows
+      `script-src 'self'` with no inline source.
+    -->
     <!--
       Canonical origin. It has to match PUBLIC_BASE_URL, because search engines
       and social previews read it as the address of this deployment; a mismatch
@@ -54,8 +60,8 @@
     </script>
     <script
       defer
-      src="https://cloud.umami.is/script.js"
-      data-website-id="b3d7552d-b639-4c71-84bc-c235227063a8"
+      src="https://u.1zyq1.com/script.js"
+      data-website-id="5926029e-342d-4041-aa5e-ae16e9849fe5"
     ></script>
   </head>
   <body>

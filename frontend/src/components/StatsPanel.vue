@@ -17,6 +17,12 @@ const WINDOW_LABELS: Record<StatWindowKey, string> = {
   total: "全部",
 };
 
+/**
+ * The skeleton mirrors the real table, so its row count comes from the same
+ * source rather than a number that could drift away from the reported windows.
+ */
+const skeletonRowCount = Object.keys(WINDOW_LABELS).length;
+
 const report = ref<StatsReport | null>(null);
 const errorMessage = ref("");
 const loading = ref(true);
@@ -45,7 +51,29 @@ onMounted((): void => {
     <p class="stats__lead">
       每个时间范围各自统计。下载是文件代理的实际交付，浏览是镜像页面的实际交付，用户是该范围内去重的登录账号。
     </p>
-    <p v-if="loading" class="page__status" role="status">正在加载统计数据。</p>
+    <template v-if="loading">
+      <!-- The live region announces the wait in words; the bars below only carry
+           the shape, so they stay out of the accessibility tree. -->
+      <p class="page__status sr-only" role="status">正在加载统计数据。</p>
+      <table class="stats__table" aria-hidden="true">
+        <thead>
+          <tr>
+            <th scope="col"><span class="skeleton stats__skeleton--label"></span></th>
+            <th scope="col"><span class="skeleton stats__skeleton--figure"></span></th>
+            <th scope="col"><span class="skeleton stats__skeleton--figure"></span></th>
+            <th scope="col"><span class="skeleton stats__skeleton--figure"></span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in skeletonRowCount" :key="row">
+            <th scope="row"><span class="skeleton stats__skeleton--label"></span></th>
+            <td><span class="skeleton stats__skeleton--figure"></span></td>
+            <td><span class="skeleton stats__skeleton--figure"></span></td>
+            <td><span class="skeleton stats__skeleton--figure"></span></td>
+          </tr>
+        </tbody>
+      </table>
+    </template>
     <p v-else-if="errorMessage" class="notice notice--warning" role="alert">{{ errorMessage }}</p>
     <table v-else-if="report" class="stats__table">
       <caption class="stats__caption">
@@ -88,7 +116,7 @@ onMounted((): void => {
 
 .stats__title {
   font-size: var(--text-subheading-size);
-  font-weight: 650;
+  font-weight: 500;
   line-height: var(--text-subheading-leading);
 }
 
@@ -97,6 +125,19 @@ onMounted((): void => {
   color: var(--text-secondary);
   font-size: var(--text-small-size);
   line-height: var(--text-small-leading);
+}
+
+/* The loading table keeps the real one's columns, padding and row rules; only
+   the cells are bars, so the figures land without moving anything. */
+.stats__skeleton--label {
+  width: var(--space-12);
+  height: var(--space-3);
+}
+
+.stats__skeleton--figure {
+  width: var(--space-10);
+  height: var(--space-3);
+  margin-inline-start: auto;
 }
 
 .stats__table {
@@ -129,7 +170,7 @@ onMounted((): void => {
 
 .stats__table thead th {
   color: var(--text-muted);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 /* Numeric column headers sit above right-aligned figures, so they line up. */
@@ -138,7 +179,7 @@ onMounted((): void => {
 }
 
 .stats__table tbody th {
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .stats__table td {
@@ -148,7 +189,7 @@ onMounted((): void => {
 
 .stats__row--total th,
 .stats__row--total td {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .stats__table tbody tr:last-child th,
