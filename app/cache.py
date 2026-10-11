@@ -1,4 +1,11 @@
-"""Disk-backed cache for immutable archive payloads."""
+"""Disk-backed cache for immutable download payloads.
+
+Both payload classes the accelerator serves -- source archives and release
+assets -- are addressed by a URL that names a fixed revision, so their bytes
+never change and a cached copy can be served indefinitely. Raw file contents
+are deliberately excluded: ``/raw/<branch>/...`` moves with the branch, and
+caching it would pin a stale copy.
+"""
 
 import hashlib
 import os
@@ -22,7 +29,7 @@ _STALE_TEMPORARY_SECONDS = 3600.0
 
 
 def media_type_for(source_url: str) -> str:
-    """Return the media type implied by an archive URL's extension."""
+    """Return the media type implied by a download URL's extension."""
     lowered = source_url.lower()
     for suffix, media_type in _MEDIA_TYPES:
         if lowered.endswith(suffix):
@@ -31,15 +38,15 @@ def media_type_for(source_url: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class CachedArchive:
-    """A complete archive payload living on disk."""
+class CachedDownload:
+    """A complete payload living on disk."""
 
     path: Path
     media_type: str
     size: int
 
 
-class PendingArchive:
+class PendingDownload:
     """A cache entry being written, published atomically once complete."""
 
     def __init__(self, temporary: Path, final: Path) -> None:
@@ -88,15 +95,15 @@ class PendingArchive:
             await handle.aclose()
 
 
-class ArchiveCache:
-    """Store archive payloads on disk and evict the least recently used."""
+class DownloadCache:
+    """Store download payloads on disk and evict the least recently used."""
 
     def __init__(self, root: Path, max_bytes: int) -> None:
         """Point the cache at a directory and a total size cap."""
         self._root: Path = root
         self._max_bytes: int = max_bytes
 
-    def lookup(self, source_url: str) -> CachedArchive | None:
+    def lookup(self, source_url: str) -> CachedDownload | None:
         """Return a complete entry, refreshing its recency, or None."""
         path = self._entry_path(source_url)
         try:
@@ -109,16 +116,16 @@ class ArchiveCache:
             os.utime(path, None)
         except OSError:
             return None
-        return CachedArchive(path, media_type_for(source_url), stat.st_size)
+        return CachedDownload(path, media_type_for(source_url), stat.st_size)
 
-    def begin(self, source_url: str) -> PendingArchive:
-        """Start writing a new entry for an archive URL."""
+    def begin(self, source_url: str) -> PendingDownload:
+        """Start writing a new entry for a download URL."""
         self._root.mkdir(parents=True, exist_ok=True)
         final = self._entry_path(source_url)
         temporary = final.with_name(final.name + _TEMPORARY_SUFFIX)
-        return PendingArchive(temporary, final)
+        return PendingDownload(temporary, final)
 
-    async def publish(self, pending: PendingArchive) -> None:
+    async def publish(self, pending: PendingDownload) -> None:
         """Commit a pending entry, then enforce the size cap."""
         if pending.written > self._max_bytes:
             await pending.abort()
@@ -186,9 +193,9 @@ class SingleFlight:
 
 
 __all__ = [
-    "ArchiveCache",
-    "CachedArchive",
-    "PendingArchive",
+    "CachedDownload",
+    "DownloadCache",
+    "PendingDownload",
     "SingleFlight",
     "media_type_for",
 ]

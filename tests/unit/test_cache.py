@@ -1,10 +1,10 @@
-"""Unit tests for the disk-backed archive cache."""
+"""Unit tests for the disk-backed download cache."""
 
 import os
 from pathlib import Path
 
 import pytest
-from app.cache import ArchiveCache, SingleFlight, media_type_for
+from app.cache import DownloadCache, SingleFlight, media_type_for
 
 pytestmark = pytest.mark.asyncio
 
@@ -28,7 +28,7 @@ def _exists(path: Path) -> bool:
     return path.exists()
 
 
-async def _publish(cache: ArchiveCache, source_url: str, payload: bytes) -> None:
+async def _publish(cache: DownloadCache, source_url: str, payload: bytes) -> None:
     pending = cache.begin(source_url)
     await pending.write(payload)
     await cache.publish(pending)
@@ -42,20 +42,28 @@ async def _publish(cache: ArchiveCache, source_url: str, payload: bytes) -> None
         ("https://github.com/acme/widgets/archive/refs/heads/main.tgz", "application/gzip"),
         ("https://github.com/acme/widgets/archive/refs/heads/main.tar", "application/x-tar"),
         ("https://github.com/acme/widgets/archive/refs/heads/main", "application/octet-stream"),
+        (
+            "https://github.com/acme/widgets/releases/download/v1.2.0/widget.exe",
+            "application/octet-stream",
+        ),
+        (
+            "https://github.com/acme/widgets/releases/download/v1.2.0/widget.tar.gz",
+            "application/gzip",
+        ),
     ],
 )
-async def test_media_type_for_maps_archive_extensions(source_url: str, expected: str) -> None:
+async def test_media_type_for_maps_download_extensions(source_url: str, expected: str) -> None:
     assert media_type_for(source_url) == expected
 
 
 async def test_lookup_returns_none_for_a_missing_entry(tmp_path: Path) -> None:
-    cache = ArchiveCache(tmp_path, 1_000_000)
+    cache = DownloadCache(tmp_path, 1_000_000)
 
     assert cache.lookup(_URL) is None
 
 
 async def test_published_entry_is_retrievable(tmp_path: Path) -> None:
-    cache = ArchiveCache(tmp_path, 1_000_000)
+    cache = DownloadCache(tmp_path, 1_000_000)
 
     await _publish(cache, _URL, b"helloworld")
 
@@ -67,7 +75,7 @@ async def test_published_entry_is_retrievable(tmp_path: Path) -> None:
 
 
 async def test_aborted_entry_is_not_retrievable(tmp_path: Path) -> None:
-    cache = ArchiveCache(tmp_path, 1_000_000)
+    cache = DownloadCache(tmp_path, 1_000_000)
     pending = cache.begin(_URL)
     await pending.write(b"partial")
 
@@ -78,7 +86,7 @@ async def test_aborted_entry_is_not_retrievable(tmp_path: Path) -> None:
 
 
 async def test_entry_without_payload_is_discarded(tmp_path: Path) -> None:
-    cache = ArchiveCache(tmp_path, 1_000_000)
+    cache = DownloadCache(tmp_path, 1_000_000)
 
     await _publish(cache, _URL, b"")
 
@@ -87,7 +95,7 @@ async def test_entry_without_payload_is_discarded(tmp_path: Path) -> None:
 
 
 async def test_entry_larger_than_the_cap_is_refused(tmp_path: Path) -> None:
-    cache = ArchiveCache(tmp_path, 4)
+    cache = DownloadCache(tmp_path, 4)
 
     await _publish(cache, _URL, b"12345")
 
@@ -98,7 +106,7 @@ async def test_entry_larger_than_the_cap_is_refused(tmp_path: Path) -> None:
 async def test_least_recently_used_entry_is_evicted_when_the_cap_is_exceeded(
     tmp_path: Path,
 ) -> None:
-    cache = ArchiveCache(tmp_path, 10)
+    cache = DownloadCache(tmp_path, 10)
     await _publish(cache, _URL, b"12345678")
     oldest = cache.lookup(_URL)
     assert oldest is not None
@@ -111,7 +119,7 @@ async def test_least_recently_used_entry_is_evicted_when_the_cap_is_exceeded(
 
 
 async def test_stale_partial_files_are_removed(tmp_path: Path) -> None:
-    cache = ArchiveCache(tmp_path, 1_000_000)
+    cache = DownloadCache(tmp_path, 1_000_000)
     stale = tmp_path / f"{'0' * 64}.entry.part"
     _write(stale, b"leftover")
     os.utime(stale, (1000, 1000))

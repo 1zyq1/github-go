@@ -174,12 +174,21 @@ async def open_upstream(
     method: str = "GET",
     headers: Mapping[str, str] | None = None,
 ) -> UpstreamResponse:
-    """Open a source response while validating every redirect by resource role."""
+    """Open a source response while validating every redirect by resource role.
+
+    The first request goes to ``target.upstream_url`` rather than the canonical
+    ``github.com`` address: for archives and raw content that is the direct
+    download host the canonical address would only redirect to, which saves a
+    round trip and keeps the request off the domain that is throttled most
+    often. Release assets keep ``github.com`` because their signed URL exists
+    nowhere else. Redirects are validated from whichever address was used, so
+    the same role allowlist still bounds where a response may lead.
+    """
     if method not in {"GET", "HEAD"}:
         code = "invalid_request"
         message = "请求方法无效。"
         raise AppError(code, message, 405)
-    current_url = target.url
+    current_url = target.upstream_url
     visited = {current_url}
     request_headers = dict(headers or {})
     for redirect_count in range(MAX_REDIRECTS + 1):

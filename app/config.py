@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     max_concurrent_proxies: Annotated[int, Field(ge=1, le=1000)] = 100
     max_connections: Annotated[int, Field(ge=1, le=1000)] = 100
     max_keepalive_connections: Annotated[int, Field(ge=1, le=1000)] = 20
+    # How long a download may wait for a free capacity slot before it is turned
+    # away with a 503. A burst is normal (a download manager opens several
+    # connections at once), so absorbing it for a moment beats refusing it; set
+    # this to 0 to refuse as soon as the limiter is full instead of queueing.
+    proxy_queue_timeout_seconds: Annotated[int, Field(ge=0, le=120)] = 10
+    # Payload cache for the two URL shapes whose bytes never change: source
+    # archives and release assets. The names keep the ``archive`` prefix they
+    # shipped with -- they are the deployed interface, and renaming them would
+    # silently drop a configured directory back to its default.
     archive_cache_dir: Path = Path(".cache/archives")
     archive_cache_max_bytes: Annotated[int, Field(ge=0)] = 20 * 1024 * 1024 * 1024
     # Accounts, sessions, quota, and statistics all live in MySQL. The three

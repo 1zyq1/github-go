@@ -9,12 +9,19 @@ import anyio
 import httpx2
 from starlette.responses import FileResponse, Response, StreamingResponse
 
-from app.cache import ArchiveCache, CachedArchive, PendingArchive, SingleFlight
+from app.cache import CachedDownload, DownloadCache, PendingDownload, SingleFlight
 from app.errors import AppError
 from app.upstream import UpstreamResponse, open_upstream
 from app.url_policy import ResourceKind, SourceTarget, decode_proxy_token
 
 _SAFE_REQUEST_HEADERS = ("range", "if-range", "if-none-match", "if-modified-since")
+# Conditional headers that describe *part* of a payload. They are dropped when
+# the request is filling the cache, because that fetch has to be the complete,
+# unconditional body: a range response would be stored as if it were whole.
+_PARTIAL_REQUEST_HEADERS = frozenset({"range", "if-range"})
+# Only classes whose URL names a fixed revision may be cached; raw content
+# follows a branch and would go stale.
+_CACHEABLE_KINDS = frozenset({ResourceKind.ARCHIVE, ResourceKind.RELEASE})
 _SAFE_RESPONSE_HEADERS = frozenset(
     {
         "accept-ranges",
@@ -52,19 +59,19 @@ class _CapacityLease:
         self._limiter.release_on_behalf_of(self._borrower)
 
 
-class _ArchiveSink:
-    """Publish one fetched archive into the cache and release its flight."""
+class _CacheSink:
+    """Publish one fetched payload into the cache and release its flight."""
 
     def __init__(
         self,
-        cache: ArchiveCache,
-        pending: PendingArchive,
+        cache: DownloadCache,
+        pending: PendingDownload,
         flight: SingleFlight,
         key: str,
         event: anyio.Event,
     ) -> None:
-        self._cache: ArchiveCache = cache
-        self._pending: PendingArchive = pending
+        self._cache: DownloadCache = cache
+        self._pending: PendingDownload = pending
         self._flight: SingleFlight = flight
         self._key: str = key
         self._event: anyio.Event = event
@@ -107,8 +114,12 @@ class ProxyService:
 
     client: httpx2.AsyncClient
     limiter: anyio.CapacityLimiter
-    cache: ArchiveCache | None = None
+    cache: DownloadCache | None = None
     flight: SingleFlight = field(default_factory=SingleFlight)
+    # How long a request may wait for a free capacity slot before it is turned
+    # away. Anything above zero turns an overload spike into a short queue
+    # instead of an immediate 503; zero restores the refuse-immediately policy.
+    queue_timeout_seconds: float = 10.0
 
     async def handle(
         self,
@@ -118,10 +129,10 @@ class ProxyService:
     ) -> Response:
         """Resolve a token and return a bounded upstream response."""
         target = decode_proxy_token(token)
-        action = await self._cache_action(target, method, request_headers)
+        action = await self._cache_action(target, method)
         if isinstance(action, Response):
             return action
-        if isinstance(action, _ArchiveSink):
+        if isinstance(action, _CacheSink):
             try:
                 return await self._fetch(target, method, request_headers, action)
             except AppError:
@@ -133,20 +144,27 @@ class ProxyService:
         self,
         target: SourceTarget,
         method: str,
-        request_headers: Mapping[str, str],
-    ) -> Response | _ArchiveSink | None:
-        """Serve a cached archive, join an in-flight fetch, or lead a new one."""
+    ) -> Response | _CacheSink | None:
+        """Serve a cached payload, join an in-flight fetch, or lead a new one.
+
+        A ranged request takes part here exactly like a plain GET. It cannot be
+        answered from an upstream range response without giving up the coalescing
+        that protects the shared egress IP, so the first request for an uncached
+        payload fetches it whole and every concurrent request -- ranged or not --
+        then reads the range it asked for straight off disk. The cost is that one
+        range request pulls the whole file upstream; the benefit is that a
+        download manager opening eight connections still causes one fetch instead
+        of eight.
+        """
         cache = self.cache
-        if cache is None or target.kind is not ResourceKind.ARCHIVE:
+        if cache is None or target.kind not in _CACHEABLE_KINDS or method != "GET":
             return None
         cached = cache.lookup(target.url)
         if cached is not None:
             return _cached_response(cached)
-        if not _may_populate_cache(method, request_headers):
-            return None
         leader, event = self.flight.join_or_lead(target.url)
         if leader:
-            return _ArchiveSink(cache, cache.begin(target.url), self.flight, target.url, event)
+            return _CacheSink(cache, cache.begin(target.url), self.flight, target.url, event)
         await event.wait()
         cached = cache.lookup(target.url)
         if cached is not None:
@@ -158,34 +176,51 @@ class ProxyService:
         target: SourceTarget,
         method: str,
         request_headers: Mapping[str, str],
-        sink: _ArchiveSink | None,
+        sink: _CacheSink | None,
     ) -> Response:
         borrower = object()
-        try:
-            self.limiter.acquire_on_behalf_of_nowait(borrower)
-        except anyio.WouldBlock as error:
-            code = "capacity_exhausted"
-            message = "下载服务繁忙, 请稍后重试."
-            raise AppError(code, message, 503) from error
+        await self._acquire(borrower)
         lease = _CapacityLease(self.limiter, borrower)
         try:
             upstream = await open_upstream(
                 self.client,
                 target,
                 method=method,
-                headers=_forwarded_request_headers(request_headers),
+                headers=_forwarded_request_headers(request_headers, complete=sink is not None),
             )
         except AppError:
             lease.release()
             raise
         return await self._response(upstream, method, lease, sink)
 
+    async def _acquire(self, borrower: object) -> None:
+        """Take a capacity slot, queueing briefly rather than failing at once.
+
+        A burst -- several users clicking download at the same moment, or one
+        download manager opening its connections -- is exactly what the limiter
+        exists to smooth, and turning it into an instant 503 punishes the very
+        traffic the service is for. Waiting a bounded moment absorbs the burst;
+        only a genuinely sustained overload still gets a 503.
+        """
+        try:
+            self.limiter.acquire_on_behalf_of_nowait(borrower)
+        except anyio.WouldBlock:
+            pass
+        else:
+            return
+        if self.queue_timeout_seconds <= 0:
+            raise _capacity_error() from None
+        with anyio.move_on_after(self.queue_timeout_seconds) as queued:
+            await self.limiter.acquire_on_behalf_of(borrower)
+        if queued.cancelled_caught:
+            raise _capacity_error() from None
+
     async def _response(
         self,
         upstream: UpstreamResponse,
         method: str,
         lease: _CapacityLease,
-        sink: _ArchiveSink | None,
+        sink: _CacheSink | None,
     ) -> Response:
         response = upstream.response
         response_open = True
@@ -253,7 +288,7 @@ def _bodyless_response(status_code: int, headers: Mapping[str, str]) -> Response
 async def _stream_response(
     response: httpx2.Response,
     lease: _CapacityLease,
-    sink: _ArchiveSink | None,
+    sink: _CacheSink | None,
 ) -> AsyncIterator[bytes]:
     try:
         async for chunk in response.aiter_bytes():
@@ -276,22 +311,32 @@ async def _stream_response(
                 lease.release()
 
 
-def _cached_response(cached: CachedArchive) -> Response:
-    """Serve a stored archive from disk, with range and HEAD support."""
+def _capacity_error() -> AppError:
+    return AppError("capacity_exhausted", "下载服务繁忙, 请稍后重试.", 503)
+
+
+def _cached_response(cached: CachedDownload) -> Response:
+    """Serve a stored payload from disk, with range and HEAD support.
+
+    The range parsing is left to :class:`FileResponse`, which reads the byte
+    range straight off the request scope -- so a download manager's partial
+    requests are answered from the copy on disk without touching upstream.
+    """
     return FileResponse(cached.path, media_type=cached.media_type)
 
 
-def _may_populate_cache(method: str, request_headers: Mapping[str, str]) -> bool:
-    """Allow caching only for a complete GET, never a partial range request."""
-    if method != "GET":
-        return False
-    return not any(name.lower() == "range" for name in request_headers)
+def _forwarded_request_headers(headers: Mapping[str, str], *, complete: bool) -> dict[str, str]:
+    """Forward the safe request headers, dropping partial ones for a cache fill.
 
-
-def _forwarded_request_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    ``complete`` marks a request that is about to be stored as the whole
+    payload: it must be unconditional, or a single range would be published as
+    if it were the entire file.
+    """
     normalized = {name.lower(): value for name, value in headers.items()}
     forwarded: dict[str, str] = {}
     for name in _SAFE_REQUEST_HEADERS:
+        if complete and name in _PARTIAL_REQUEST_HEADERS:
+            continue
         value = normalized.get(name)
         if value:
             forwarded[name] = value

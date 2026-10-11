@@ -10,13 +10,15 @@
 
 ## 支持范围
 
-| 类型 | 接受 | 上游 |
+| 类型 | 接受 | 首跳 |
 | --- | --- | --- |
-| Release 资产 | `github.com/{owner}/{repo}/releases/download/...` | `release-assets.githubusercontent.com`、`objects.githubusercontent.com` |
-| 源码归档 | `github.com/{owner}/{repo}/archive/...` | `codeload.github.com` |
-| Raw | `raw.githubusercontent.com/...`、`github.com/.../raw/...` | `raw.githubusercontent.com` |
-| Blob | `github.com/.../blob/...?raw=1` | 重写为 `.../raw/...` |
+| Release 资产 | `github.com/{owner}/{repo}/releases/download/...` | `github.com`（签名地址只能从这里取，随后 302 到 `release-assets.githubusercontent.com` / `objects.githubusercontent.com`） |
+| 源码归档 | `github.com/{owner}/{repo}/archive/...` | **直连 `codeload.github.com`** |
+| Raw | `raw.githubusercontent.com/...`、`github.com/.../raw/...` | **直连 `raw.githubusercontent.com`** |
+| Blob | `github.com/.../blob/...?raw=1` | 重写为 `.../raw/...` 后同样直连 raw 主机 |
 | 页面 | `github.com/{owner}`、`github.com/{owner}/{repo}/...` | 同源镜像 `github.com`，不走 `/proxy/` |
+
+归档与 raw 的有效首跳被改写成真正持有字节的主机（`github.com/.../archive/refs/heads/main.zip` → `codeload.github.com/{o}/{r}/zip/refs/heads/main`，`github.com/{o}/{r}/raw/<ref>/...` → `raw.githubusercontent.com/{o}/{r}/<ref>/...`），省掉一次 302 往返，也避开最容易被干扰的域名。Release 资产没有这条捷径：它的签名地址只存在于 `github.com` 的 302 之后。改写结果作为 `SourceTarget.upstream_url` 与用于 token 的规范 `url` 分开保存，因此**改动前签发的 token 仍然可以解码**，规范地址与缓存键也不随抓取路径变化。
 
 文件类返回 `proxy_url` 为 `/proxy/{token}`；页面类返回 `kind: "page"` 与镜像路径本身，例如 `github.com/1zyq1` 得到 `/1zyq1`。文件优先判定，因此 `.../archive/refs/heads/main.zip` 仍按归档下载而非镜像页面。
 
@@ -143,8 +145,9 @@ GET /acme/widgets?tab=...  -> 查询串一并透传
 | `MAX_CONNECTIONS` | `100` | 上游连接上限 |
 | `MAX_KEEPALIVE_CONNECTIONS` | `20` | 不得大于 `MAX_CONNECTIONS` |
 | `MAX_CONCURRENT_PROXIES` | `100` | 并发下载上限 |
+| `PROXY_QUEUE_TIMEOUT_SECONDS` | `10` | 槽位用满后新请求最多排队等待的秒数，超时才 503；`0` 表示一满就拒绝 |
 | `USER_AGENT` | `github-accelerator/0.1` | 出站 UA |
-| `ARCHIVE_CACHE_DIR` | `.cache/archives` | 归档缓存目录，须对运行用户可写 |
+| `ARCHIVE_CACHE_DIR` | `.cache/archives` | 下载缓存目录，须对运行用户可写 |
 | `ARCHIVE_CACHE_MAX_BYTES` | `21474836480` | 缓存总量上限（20 GiB），设为 `0` 关闭缓存 |
 | `TRUSTED_HOSTS` | 空 | 逗号分隔的 Host 白名单。留空接受任意 Host；非空时由 Starlette `TrustedHostMiddleware` 在最外层拦截伪造 Host，返回 400 `Invalid host header` |
 | `USAGE_LIMIT` | `10` | 每个账号在每个窗口内的访问次数上限 |
@@ -169,9 +172,9 @@ GET /acme/widgets?tab=...  -> 查询串一并透传
 | `SMTP_FROM` | 空 | 发件地址，留空时回退到 `SMTP_USERNAME` |
 | `SMTP_STARTTLS` | `true` | `587` 用 `true`（STARTTLS），`465` 用 `false`（隐式 TLS） |
 
-表中是代码默认值；`.env.example` 另给了一套更保守的起步值（连接 16、keepalive 8、并发 8），适合直接复制的场景。
+表中是代码默认值；`.env.example` 另给了一套按单机部署给出的起步值（连接 128、keepalive 32、并发 64、排队 10 秒）。并发上限决定同时有多少个下载真的在回源，调得过小只会让超额请求排队，而单机代理共用一个出口 IP，排太久并不会更快。
 
-账号与用量在 MySQL 里，不在容器卷里，所以 `accelerator-cache` 卷只承载归档缓存。数据库账号需要有**建表权限**（首次运行会建表）；测试用 `MYSQL_TABLE_PREFIX` 指到另一套表名，因此测试与正式数据可以共用一个库而互不干扰。
+账号与用量在 MySQL 里，不在容器卷里，所以 `accelerator-cache` 卷只承载下载缓存。数据库账号需要有**建表权限**（首次运行会建表）；测试用 `MYSQL_TABLE_PREFIX` 指到另一套表名，因此测试与正式数据可以共用一个库而互不干扰。
 
 ## 搜索引擎与访问统计
 
@@ -193,16 +196,18 @@ docker compose up --build
 
 归档缓存需要可写空间，compose 已用命名卷挂到 `/app/.cache`；镜像里该目录预先以 1001 建立，所以卷会继承正确属主。直接跑 `uvicorn` 时，把 `ARCHIVE_CACHE_DIR` 指到一个存在的可写目录即可，否则缓存会写入失败（响应仍正常，但每次都回源）。
 
-## 归档缓存
+## 下载缓存
 
-源码归档由 `codeload.github.com` 按需生成，且**按来源 IP 限流**。单机代理意味着所有用户共用一个出口 IP，热门归档被反复请求时会被限流（429/403），随后升级为静默挂起。缓存是唯一有效的对策。
+源码归档由 `codeload.github.com` 按需生成，且**按来源 IP 限流**。单机代理意味着所有用户共用一个出口 IP，热门归档被反复请求时会被限流（429/403），随后升级为静默挂起。缓存是唯一有效的对策，Release 资产同理——它是绝大多数人真正下载的东西，而 CDN 也按来源 IP 计数。
 
-- 只缓存**归档**。归档在 tag/commit 定死之后内容不变，缓存安全。raw 指向分支头、内容会变，因此不缓存；Release 资产走 CDN，也不缓存。
+- 缓存**两类 payload**：源码归档与 Release 资产。两者的 URL 都指向固定修订（`archive/refs/tags/<tag>`、`releases/download/<tag>/<file>`），内容不会变，缓存安全。**raw 不缓存**：`/raw/<branch>/...` 跟着分支头走，缓存下来会一直下发旧内容。
 - 首次请求边回源边落盘，写临时文件后**原子改名**，因此不会出现半截文件。
 - 同一 URL 的并发请求**合并成一次回源**，避免几十个用户同时打 codeload。
-- 命中后直接由 `FileResponse` 从磁盘下发，**Range 断点续传、HEAD、If-Range、416 全部原生支持**，比回源更快。
+- **`Range` 请求同样参与合并**。下载管理器（IDM/aria2）会把一个文件拆成 N 个连接，每个都带 `Range`；如果让它们各自回源，就是 N 次回源，既打满槽位又触发按 IP 限流。现在的做法是：未命中缓存时由第一个请求领一次**完整**回源并落盘（填缓存的那一次必须去条件、去 `Range`，否则半个文件会被当成整个文件存下来），其余并发请求等它落盘后各自从磁盘取自己那一段。代价是**触发填充的那个请求会收到完整响应体（200）而不是 206**——HTTP 允许服务端忽略 `Range`，且此后同一个 URL 的任何请求（含 `Range`）都直接走磁盘。
+- 命中后直接由 `FileResponse` 从磁盘下发，**Range 断点续传、HEAD、If-Range、416 全部原生支持**，比回源更快。响应体里多段 range 也由它处理。
 - **LRU 淘汰**：超过 `ARCHIVE_CACHE_MAX_BYTES` 时按最近使用时间删除最旧的条目；单文件大于上限则不落盘。崩溃遗留的 `.part` 临时文件超过一小时会被清理。
 - 磁盘写失败（如目录不可写、磁盘满）不会破坏响应，只是本次不缓存。
+- **进程数是刻意的**：`uvicorn app.main:app` 不加 `--workers`。请求合并、容量限流器与缓存飞行状态都在进程内，多 worker 会让同一个 URL 在每个 worker 里各回源一次，正好抵消掉合并的意义。代理是 I/O 密集的，单进程配 async 并发不是瓶颈；要横向扩展应该拆成多台机器并各自持有独立缓存，而不是在同一台机器上加 worker。
 
 清空缓存直接删目录内容即可：
 
@@ -220,13 +225,16 @@ Remove-Item -Recurse -Force .cache/archives/*
 - `POST /api/resolve` 有 8192 字节请求体上限。
 - Host 白名单是**可选**的：`TRUSTED_HOSTS` 留空时接受任意 Host 首部，暴露到公网前应当显式设置。非空时校验发生在最外层中间件，先于任何路由与请求体限制。
 - 上游 403/429 映射为 `upstream_rate_limited` 503 并原样透传 `Retry-After`（仅接受纯数字秒数，HTTP-date 形式丢弃），不会退化成含糊的 502。
+- 上游并发槽位用满时不会立刻失败：请求先排队，最多等 `PROXY_QUEUE_TIMEOUT_SECONDS` 秒（默认 10），仍无空位才返回 503 `capacity_exhausted`。压测式的持续超载才会真的被拒。
 - 账号门禁在最外层中间件里完成：先解析会话、再判权限、最后计量，因此未授权的请求根本到不了上游。
 - 登录不区分「用户不存在」与「密码错误」，统一返回 401 `invalid_credentials`；注册会如实区分 `username_taken`（409）与 `email_taken`（409）。也就是说，注册接口可以拿来确认某个用户名或邮箱是否已被占用——这是「注册时立刻告知冲突」换来的代价，重发接口的 60 秒冷却只能限制邮件频率，不能消除这一点。
 - 验证邮件只带一个随机 token（库里存 SHA-256），链接本身不含用户名或密码；链接默认 24 小时有效，同一账号同时只有一封邮件有效，验证成功后链接立即作废。
 
 ## 验证结果
 
-后端：`ruff check`、`ruff format --check`、`basedpyright`（`typeCheckingMode = "all"`）全绿；**357 个测试通过，覆盖率 93.29%**。
+后端：`ruff check`、`ruff format --check`、`basedpyright`（`typeCheckingMode = "all"`）全绿；**421 个测试通过，覆盖率 91.57%**。
+
+首跳改写另做了一次真实网络验证（不走 mock）：`archive/refs/heads/main.zip`、`archive/refs/tags/v2.31.0.tar.gz`、`github.com/.../raw/...`、`.../blob/...`、`raw.githubusercontent.com/...` 五例逐个实抓，全部 200，且开头字节分别为 `PK\x03\x04`、`\x1f\x8b` 与 `import`。请求合并与「Range 请求不回源」由 `tests/unit/test_proxy.py` 里可在服务层精确控制交错时序的用例覆盖；`tests/integration/test_archive_cache.py` 另外验证了缓存命中后的 `Range`/`HEAD`/`416` 与 Release 资产缓存。
 
 前端：`vue-tsc` + `tsc` 类型检查、`biome check`（25 个文件）、**159 个 Vitest 测试**全绿；产物 CSS 115.41 kB、JS 91.13 kB，实际下发 gzip 后为 38.21 kB / 34.06 kB。
 
@@ -238,7 +246,7 @@ Remove-Item -Recurse -Force .cache/archives/*
 
 ## 已知限制
 
-- **归档在本次验证环境下不可用**：`github.com` 在本机解析到 `20.205.243.166` 且直连 5 秒超时（DNS 六次一致），而 `codeload.github.com`、`raw.githubusercontent.com`、`release-assets.githubusercontent.com` 均 0.1 秒连通。归档请求因此在首跳超时并返回 504。阻断来自本机到 `github.com` 的网络，而不是链路本身：本机直连 `codeload.github.com` 返回 `200 application/zip` 且字节以 `PK\x03\x04` 开头；部署环境（能访问 `github.com`）上归档 `HEAD` 同样返回 `200 application/zip`、`GET` 返回以 `PK` 开头的 zip 字节。
+- **本机到 `github.com` 不可用，但归档不再受影响**：`github.com` 在本机解析到 `20.205.243.166` 且直连超时/空回复（DNS 六次一致），而 `codeload.github.com`、`raw.githubusercontent.com`、`release-assets.githubusercontent.com` 均 0.1 秒连通。由于归档与 raw 的首跳已改写为直连主机，这两类在本机可以正常代理；只有 Release 资产仍要从 `github.com` 取签名地址，因此在本机不可用，而在能访问 `github.com` 的部署环境上正常。这条限制也说明：把首跳改写成直连主机本身就是一个可用性改进。
 - **容器未实机验证**：本机没有 Docker CLI（`docker` 与 `docker compose` 均为 CommandNotFoundException），`Dockerfile` 与 `compose.yaml` 只做过静态核对，未执行 `docker build` / `compose up`。
 - 8080/8000 端口被其他进程占用时，改用其他端口启动。
 

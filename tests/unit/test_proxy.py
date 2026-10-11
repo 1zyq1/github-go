@@ -1,18 +1,21 @@
 """Unit tests for bounded streaming proxy behavior."""
 
 from collections.abc import AsyncIterator, Callable, Mapping
+from pathlib import Path
 from typing import override
 
 import anyio
 import httpx2
 import pytest
+from app.cache import DownloadCache
 from app.errors import AppError
 from app.proxy import ProxyService
 from app.url_policy import encode_proxy_token
-from starlette.responses import Response, StreamingResponse
+from starlette.responses import FileResponse, Response, StreamingResponse
 
 pytestmark = pytest.mark.asyncio
 _TOKEN = encode_proxy_token("https://raw.githubusercontent.com/acme/widgets/main/file.bin")
+_ARCHIVE_TOKEN = encode_proxy_token("https://github.com/acme/widgets/archive/refs/tags/v1.0.0.zip")
 
 
 class _Stream(httpx2.AsyncByteStream):
@@ -58,14 +61,28 @@ def _service(
     handler: Callable[[httpx2.Request], httpx2.Response],
     *,
     capacity: int = 1,
+    queue_timeout: float = 0.0,
+    cache: DownloadCache | None = None,
 ) -> tuple[ProxyService, httpx2.AsyncClient, anyio.CapacityLimiter]:
+    """Build a proxy over a mock transport.
+
+    The queue wait defaults to zero so every other test sees a full limiter as
+    an immediate refusal; the tests that exercise queueing ask for a wait
+    explicitly rather than making the rest of the file sit through one.
+    """
     client = httpx2.AsyncClient(
         transport=httpx2.MockTransport(handler),
         follow_redirects=False,
         trust_env=False,
     )
     limiter = anyio.CapacityLimiter(capacity)
-    return ProxyService(client=client, limiter=limiter), client, limiter
+    service = ProxyService(
+        client=client,
+        limiter=limiter,
+        cache=cache,
+        queue_timeout_seconds=queue_timeout,
+    )
+    return service, client, limiter
 
 
 async def _body(response: Response) -> bytes:
@@ -76,6 +93,16 @@ async def _body(response: Response) -> bytes:
         assert isinstance(chunk, bytes)
         body.extend(chunk)
     return bytes(body)
+
+
+def _read_file(path: str) -> bytes:
+    """Read a file the proxy published, from a plain helper rather than a task."""
+    return Path(path).read_bytes()
+
+
+def _entry_suffixes(directory: Path) -> list[str]:
+    """List what the cache directory holds, by suffix."""
+    return sorted(entry.suffix for entry in directory.iterdir())
 
 
 @pytest.mark.parametrize("status_code", [200, 206])
@@ -249,7 +276,7 @@ async def test_drops_upstream_retry_after_that_is_not_a_delay() -> None:
         await client.aclose()
 
 
-async def test_rejects_capacity_exhaustion_without_queueing() -> None:
+async def test_refuses_capacity_exhaustion_when_queueing_is_disabled() -> None:
     gate = anyio.Event()
     first_stream = _Stream((b"first",), gate=gate)
     service, client, limiter = _service(
@@ -265,6 +292,63 @@ async def test_rejects_capacity_exhaustion_without_queueing() -> None:
         gate.set()
         assert await _body(first) == b"first"
         assert first_stream.closed is True
+        assert limiter.borrowed_tokens == 0
+    finally:
+        await client.aclose()
+
+
+async def test_queues_for_a_free_slot_instead_of_failing_at_once() -> None:
+    gate = anyio.Event()
+    first_stream = _Stream((b"first",), gate=gate)
+    calls: list[int] = []
+
+    def handler(_request: httpx2.Request) -> httpx2.Response:
+        calls.append(len(calls))
+        if len(calls) == 1:
+            return _response(200, stream=first_stream)
+        return _response(200, content=b"second")
+
+    service, client, limiter = _service(handler, capacity=1, queue_timeout=5.0)
+    try:
+        first = await service.handle(_TOKEN, "GET", {})
+        assert limiter.borrowed_tokens == 1
+
+        results: list[Response] = []
+
+        async def queued() -> None:
+            results.append(await service.handle(_TOKEN, "GET", {}))
+
+        async with anyio.create_task_group() as tasks:
+            _ = tasks.start_soon(queued)
+            # The waiter must not steal the slot from the request that holds it.
+            await anyio.sleep(0.1)
+            assert limiter.borrowed_tokens == 1
+            gate.set()
+            assert await _body(first) == b"first"
+
+        assert [await _body(response) for response in results] == [b"second"]
+        assert limiter.borrowed_tokens == 0
+    finally:
+        await client.aclose()
+
+
+async def test_gives_up_when_the_queue_wait_expires() -> None:
+    gate = anyio.Event()
+    first_stream = _Stream((b"first",), gate=gate)
+    service, client, limiter = _service(
+        lambda _request: _response(200, stream=first_stream),
+        capacity=1,
+        queue_timeout=0.05,
+    )
+    try:
+        first = await service.handle(_TOKEN, "GET", {})
+        with pytest.raises(AppError) as raised:
+            _ = await service.handle(_TOKEN, "GET", {})
+        assert raised.value.code == "capacity_exhausted"
+        assert raised.value.status_code == 503
+        assert limiter.borrowed_tokens == 1
+        gate.set()
+        assert await _body(first) == b"first"
         assert limiter.borrowed_tokens == 0
     finally:
         await client.aclose()
@@ -291,3 +375,107 @@ async def test_setup_errors_release_capacity() -> None:
         assert limiter.borrowed_tokens == 0
     finally:
         await client.aclose()
+
+
+async def test_concurrent_cache_misses_coalesce_into_one_upstream_fetch(
+    tmp_path: Path,
+) -> None:
+    """The second request waits for the first instead of opening its own fetch.
+
+    The whole point of the single flight is that a burst of requests for one
+    payload costs one upstream call, so this is driven at the service level
+    where the interleaving is exact: one request holds the upstream open while
+    the other arrives, and the arrival must read the publisher's file rather
+    than start a second fetch.
+    """
+    requests: list[httpx2.Request] = []
+    gate = anyio.Event()
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        stream = _Stream((b"payload",), gate=gate)
+        return _response(200, {"content-type": "application/zip"}, stream)
+
+    cache = DownloadCache(tmp_path, 1_000_000)
+    service, client, _limiter = _service(handler, capacity=4, cache=cache)
+    streamed: list[bytes] = []
+    from_disk: list[str] = []
+
+    async def fetch() -> None:
+        response = await service.handle(_ARCHIVE_TOKEN, "GET", {})
+        if isinstance(response, FileResponse):
+            from_disk.append(str(response.path))
+        else:
+            streamed.append(await _body(response))
+
+    try:
+        async with anyio.create_task_group() as tasks:
+            _ = tasks.start_soon(fetch)
+            _ = tasks.start_soon(fetch)
+            await anyio.sleep(0.2)
+            gate.set()
+    finally:
+        await client.aclose()
+
+    assert len(requests) == 1
+    assert streamed == [b"payload"]
+    assert len(from_disk) == 1
+    assert _read_file(from_disk[0]) == b"payload"
+
+
+async def test_cache_fill_keeps_partial_headers_out_of_the_upstream_request(
+    tmp_path: Path,
+) -> None:
+    """A ranged request fills the cache from an unconditional whole-payload fetch.
+
+    Storing the bytes of a 206 under the URL of the whole file would poison the
+    cache, so the fill has to ask for everything -- while every other
+    conditional header still travels upstream.
+    """
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return _response(200, {"content-type": "application/zip"}, _Stream((b"whole",)))
+
+    cache = DownloadCache(tmp_path, 1_000_000)
+    service, client, _limiter = _service(handler, capacity=4, cache=cache)
+    try:
+        response = await service.handle(
+            _ARCHIVE_TOKEN,
+            "GET",
+            {"Range": "bytes=0-2", "If-Range": '"etag"', "If-None-Match": '"etag"'},
+        )
+
+        assert await _body(response) == b"whole"
+    finally:
+        await client.aclose()
+
+    assert requests[0].headers.get("range") is None
+    assert requests[0].headers.get("if-range") is None
+    assert requests[0].headers["if-none-match"] == '"etag"'
+    assert _entry_suffixes(tmp_path) == [".entry"]
+
+
+async def test_raw_content_never_enters_the_cache(tmp_path: Path) -> None:
+    """Raw URLs follow a branch, so they are fetched every time."""
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return _response(200, {"content-type": "text/plain"}, _Stream((b"hello",)))
+
+    cache = DownloadCache(tmp_path, 1_000_000)
+    service, client, _limiter = _service(handler, capacity=4, cache=cache)
+    try:
+        first = await service.handle(_TOKEN, "GET", {"Range": "bytes=0-1"})
+        second = await service.handle(_TOKEN, "GET", {"Range": "bytes=0-1"})
+
+        assert await _body(first) == b"hello"
+        assert await _body(second) == b"hello"
+    finally:
+        await client.aclose()
+
+    assert len(requests) == 2
+    assert requests[0].headers["range"] == "bytes=0-1"
+    assert _entry_suffixes(tmp_path) == []

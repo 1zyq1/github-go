@@ -193,6 +193,65 @@ def test_parse_source_url_rejects_unsupported_or_unsafe_urls(
     assert raw_url not in captured.value.message
 
 
+DIRECT_UPSTREAM_URLS = [
+    pytest.param(
+        "https://github.com/acme/widget/releases/download/v1.2.0/widget.zip",
+        "https://github.com/acme/widget/releases/download/v1.2.0/widget.zip",
+        id="release-keeps-github",
+    ),
+    pytest.param(
+        "HTTPS://GitHub.COM:443/acme/widget/archive/refs/heads/main.zip",
+        "https://codeload.github.com/acme/widget/zip/refs/heads/main",
+        id="archive-head-uses-codeload",
+    ),
+    pytest.param(
+        "https://github.com/acme/widget/archive/refs/tags/v1.0.0.tar.gz",
+        "https://codeload.github.com/acme/widget/tar.gz/refs/tags/v1.0.0",
+        id="archive-tag-uses-codeload",
+    ),
+    pytest.param(
+        "https://github.com/acme/widget/archive/refs/heads/feature/deep/ref.zip",
+        "https://codeload.github.com/acme/widget/zip/refs/heads/feature/deep/ref",
+        id="archive-ref-with-slashes",
+    ),
+    pytest.param(
+        "https://github.com/acme/widget/raw/feature/docs/readme.md",
+        "https://raw.githubusercontent.com/acme/widget/feature/docs/readme.md",
+        id="github-raw-uses-content-host",
+    ),
+    pytest.param(
+        "https://github.com/acme/widget/blob/main/docs/readme.md?raw=1",
+        "https://raw.githubusercontent.com/acme/widget/main/docs/readme.md",
+        id="blob-uses-content-host",
+    ),
+    pytest.param(
+        "https://raw.githubusercontent.com/acme/widget/main/docs/readme.md",
+        "https://raw.githubusercontent.com/acme/widget/main/docs/readme.md",
+        id="content-host-is-already-direct",
+    ),
+]
+
+
+@pytest.mark.parametrize(("raw_url", "expected"), DIRECT_UPSTREAM_URLS)
+def test_parse_source_url_targets_the_direct_download_host(raw_url: str, expected: str) -> None:
+    assert parse_source_url(raw_url).upstream_url == expected
+
+
+@pytest.mark.parametrize(
+    "raw_url",
+    [
+        "https://github.com/acme/widget/archive/refs/heads/main.tgz",
+        "https://github.com/acme/widget/archive/refs/heads/main",
+    ],
+)
+def test_archive_without_a_codeload_format_keeps_the_github_hop(raw_url: str) -> None:
+    """A format codeload does not mint has no direct address to rewrite to."""
+    target = parse_source_url(raw_url)
+
+    assert target.upstream_url == target.url
+    assert target.url.startswith("https://github.com/")
+
+
 SUPPORTED_PAGE_URLS = [
     pytest.param("https://github.com/1zyq1", "/1zyq1", id="profile"),
     pytest.param("https://github.com/acme", "/acme", id="single-segment-owner"),

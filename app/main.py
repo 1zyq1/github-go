@@ -40,7 +40,7 @@ from app.auth import (
     current_session_token,
     current_user,
 )
-from app.cache import ArchiveCache
+from app.cache import DownloadCache
 from app.config import Settings
 from app.errors import AppError, error_response
 from app.mailer import MailDeliveryError, Mailer, build_mailer, verification_link
@@ -92,11 +92,11 @@ def _service_unavailable() -> AppError:
     return AppError("internal_error", "服务暂时不可用。", 500)
 
 
-def _build_archive_cache(settings: Settings) -> ArchiveCache | None:
-    """Build the archive cache, or disable caching with a zero size cap."""
+def _build_download_cache(settings: Settings) -> DownloadCache | None:
+    """Build the payload cache, or disable caching with a zero size cap."""
     if settings.archive_cache_max_bytes <= 0:
         return None
-    return ArchiveCache(settings.archive_cache_dir, settings.archive_cache_max_bytes)
+    return DownloadCache(settings.archive_cache_dir, settings.archive_cache_max_bytes)
 
 
 def _spa_gate_policy(settings: Settings) -> GatePolicy:
@@ -876,7 +876,7 @@ def create_app(  # noqa: PLR0915
 ) -> FastAPI:
     """Create an application instance with safe API and proxy routes."""
     app_settings = settings or Settings()
-    archive_cache = _build_archive_cache(app_settings)
+    download_cache = _build_download_cache(app_settings)
     gate_policy = _spa_gate_policy(app_settings)
     # One pool serves the whole process. It is created lazily, because the tests
     # build the application without running the ASGI lifespan, and it is only
@@ -907,7 +907,12 @@ def create_app(  # noqa: PLR0915
         client = upstream_client or build_upstream_client(app_settings)
         limiter = capacity_limiter or anyio.CapacityLimiter(app_settings.max_concurrent_proxies)
         await store.initialize()
-        proxy_service = ProxyService(client, limiter, archive_cache)
+        proxy_service = ProxyService(
+            client,
+            limiter,
+            download_cache,
+            queue_timeout_seconds=app_settings.proxy_queue_timeout_seconds,
+        )
         web_page_proxy = WebPageProxy(client)
         try:
             yield
@@ -950,7 +955,12 @@ def create_app(  # noqa: PLR0915
         # This path exists so tests can drive the application without running
         # the ASGI lifespan; the account store above needs no such treatment
         # because it brings its own pool up on the first request.
-        proxy_service = ProxyService(upstream_client, capacity_limiter, archive_cache)
+        proxy_service = ProxyService(
+            upstream_client,
+            capacity_limiter,
+            download_cache,
+            queue_timeout_seconds=app_settings.proxy_queue_timeout_seconds,
+        )
         web_page_proxy = WebPageProxy(upstream_client)
     return application
 

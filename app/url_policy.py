@@ -37,6 +37,15 @@ _MALFORMED_ESCAPE_PATTERN = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _SEPARATOR_ESCAPE_PATTERN = re.compile(r"%(?:2f|5c)", re.IGNORECASE)
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]+\Z")
 _PATH_SAFE = "!$&'()*+,;=:@~-._"
+# GitHub only mints archives in these two formats, and codeload names them
+# without the leading dot. Anything else (``.tgz``, a extensionless path) keeps
+# the github.com first hop rather than inventing a codeload route for it.
+_ARCHIVE_FORMATS: tuple[tuple[str, str], ...] = (
+    (".tar.gz", "tar.gz"),
+    (".zip", "zip"),
+)
+_CODELOAD_HOST = "codeload.github.com"
+_RAW_CONTENT_HOST = "raw.githubusercontent.com"
 
 
 class ResourceKind(StrEnum):
@@ -68,11 +77,21 @@ class RedirectHostRole(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SourceTarget:
-    """Canonical source URL and its validated routing policy."""
+    """Canonical source URL and its validated routing policy.
+
+    ``url`` is the identity of the target: it is what a proxy token encodes and
+    what the disk cache keys on, so it must stay the ``github.com`` address a
+    user pasted even when ``upstream_url`` points somewhere else. ``upstream_url``
+    is where the bytes are actually fetched from -- the direct-download host that
+    ``github.com`` would otherwise answer with a redirect to. Keeping the two
+    apart means a token minted before the direct hosts existed still decodes, and
+    a cache entry keeps its name when the fetch route changes.
+    """
 
     url: str
     kind: ResourceKind
     redirect_host_role: RedirectHostRole
+    upstream_url: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +248,66 @@ def _canonical_path(segments: list[str]) -> str:
     return "/" + "/".join(encoded)
 
 
+def _direct_archive_url(segments: list[str]) -> str | None:
+    """Map ``/archive/refs/{heads|tags}/<ref>.<fmt>`` onto codeload's layout.
+
+    ``github.com`` answers an archive request with a redirect to
+    ``codeload.github.com/{owner}/{repo}/{fmt}/refs/{heads|tags}/{ref}``: the
+    format moves in front of the ref and loses its leading dot. Building that
+    address directly removes a round trip and keeps the first request off the
+    domain that is most often throttled. Returns ``None`` when no codeload route
+    exists for the requested format, so the caller falls back to ``github.com``.
+    """
+    last = segments[-1]
+    lowered = last.lower()
+    for suffix, format_name in _ARCHIVE_FORMATS:
+        if not lowered.endswith(suffix):
+            continue
+        # Segments are /{owner}/{repo}/archive/refs/{heads|tags}/{ref...}: the
+        # ref begins at index 5 and may itself contain slashes.
+        ref = [*segments[5:-1], last[: -len(suffix)]]
+        if any(not part for part in ref):
+            return None
+        path = _canonical_path([segments[0], segments[1], format_name, "refs", segments[4], *ref])
+        return urlunsplit(("https", _CODELOAD_HOST, path, "", ""))
+    return None
+
+
+def _direct_raw_url(host: str, segments: list[str]) -> str | None:
+    """Map a ``github.com/{owner}/{repo}/raw/...`` path onto the raw content host.
+
+    That host has no ``raw`` segment: ``/owner/repo/raw/<ref>/<path>`` becomes
+    ``/owner/repo/<ref>/<path>``. Inputs that already name the raw host keep
+    their own authority, and a path too short to hold a ref returns ``None``.
+    """
+    if host != "github.com":
+        return None
+    rest = segments[3:]
+    if not rest:
+        return None
+    path = _canonical_path([segments[0], segments[1], *rest])
+    return urlunsplit(("https", _RAW_CONTENT_HOST, path, "", ""))
+
+
+def _direct_upstream_url(
+    host: str,
+    kind: ResourceKind,
+    segments: list[str],
+    canonical_url: str,
+) -> str:
+    """Return the host that serves a target's bytes, or the canonical URL.
+
+    Release assets are deliberately absent: their signed, short-lived URL only
+    exists behind the ``github.com`` redirect, so there is nothing to skip.
+    """
+    direct: str | None = None
+    if kind is ResourceKind.ARCHIVE:
+        direct = _direct_archive_url(segments)
+    elif kind is ResourceKind.RAW:
+        direct = _direct_raw_url(host, segments)
+    return direct or canonical_url
+
+
 def parse_source_url(value: str) -> SourceTarget:
     """Validate and canonicalize one supported user-supplied GitHub URL."""
     if not 1 <= len(value) <= MAX_SOURCE_URL_LENGTH:
@@ -252,7 +331,12 @@ def parse_source_url(value: str) -> SourceTarget:
     else:
         kind, role = _classify_raw_host(segments)
     canonical_url = urlunsplit(("https", host, _canonical_path(segments), "", ""))
-    return SourceTarget(canonical_url, kind, role)
+    return SourceTarget(
+        canonical_url,
+        kind,
+        role,
+        _direct_upstream_url(host, kind, segments, canonical_url),
+    )
 
 
 def parse_page_url(value: str) -> PageTarget:
